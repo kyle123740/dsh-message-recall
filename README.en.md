@@ -1,0 +1,142 @@
+# dsh-message-recall
+
+Add **Recall / Delete** to *every single message* in a [DeepSeek Harness](https://github.com/deepseek-ai/dsh) conversation. Hover any message row and a compact action cluster appears at its corner.
+
+English | [中文](./README.md)
+
+```
+your prompt     [ Recall ]  [ Delete ]  [ Delete onward ]
+AI answer                    [ Delete ]  [ Delete onward ]
+tool row                     [ Delete ]  [ Delete onward ]
+```
+
+- **In place** — no fork, no new session, no window switch.
+- **Really gone** — the removed content leaves both the **model context** and the **transcript**, and stays gone across reloads and restarts.
+- **Log-safe** — the DSH session log is append-only; this plugin uses the same mechanism as official compaction (see *How it works*).
+
+## The three actions
+
+| Action | Applies to | What it does |
+| --- | --- | --- |
+| **Recall** | only messages **you** sent (including steering inserts sent mid-run) | The message leaves the model context and the transcript, and its **original text is dropped back into the composer** so you can edit and resend. An inline note stays where it was: “You recalled a message · preview”, with *Edit again* / *Copy text*. |
+| **Delete** | any message (AI answers and tool rows included) | Deleting an AI answer also removes **the tool results of that step** — one step is one model call plus the tool executions it requested, and half-removing it would break the provider's call/result pairing on the next request. Clicking a tool row resolves back to the answer that owns it. Destructive: **two clicks** to confirm. |
+| **Delete onward** | any message | Truncates the conversation from that message to the end, in place. |
+
+## Install
+
+From the DSH built-in terminal (or any terminal with `dsh`):
+
+```bash
+# desktop profile
+dsh plugin --profile desktop add github:kyle123740/dsh-message-recall
+
+# web profile
+dsh plugin --profile web add github:kyle123740/dsh-message-recall
+```
+
+Pin a version for a reproducible install:
+
+```bash
+dsh plugin --profile desktop add github:kyle123740/dsh-message-recall#v0.1.0
+```
+
+Then **restart that profile once** (the Host half needs a fresh import) and reload the UI (the Client half is fetched by the page). Toggles live under *Settings → Plugins*, or:
+
+```bash
+dsh plugin --profile desktop disable dsh-message-recall
+dsh plugin --profile desktop enable  dsh-message-recall
+```
+
+> A plugin runs with the privileges of your DSH process and may execute code at install time. Read the source and the licence before you install.
+
+### Uninstall
+
+```bash
+dsh plugin --profile desktop remove dsh-message-recall
+```
+
+Nothing dangles: a tombstone is an ordinary log event, so after uninstalling those rows simply stop rendering a note and the session stays readable.
+
+## How it works
+
+1. Resolve the message's position in the current **surface** (the model-visible context).
+2. Append one **empty `user/message` tombstone** carrying `surfaceOp: { op: 'replace', startSeq, endSeq }` plus `sourceEventSeqs: [shadowed seqs]`.
+3. The surface is the single source of derived model history (`Session.deriveMessages`), so the shadowed content **is not sent on the next request**.
+4. The original events stay in the log. Reopening the session replays `foldSurface(events)` and lands on exactly the same surface — deleted content does not come back to life.
+
+Two details worth knowing, both learned the hard way:
+
+**An empty `user/message` never reaches the provider.** The encoder in `dsh-llm-deepseek` has `if (message.role === "user" && content.length === 0) continue;`, so the tombstone costs no context and leaves no “(this message was deleted)” noise in front of the model.
+
+**The surface is not the transcript.** `dsh-session` says so out loud: the surface deliberately shadows replaced ranges, because it is the *model* view; a human transcript needs append-origin events, otherwise one replacement would silently erase rows the user already read. So removing something from the model context does **not** remove the row. The hiding is derived client-side from the tombstone's own `source.removed`:
+
+- a single recall/delete hides exactly that span (including log-only rows interleaved inside it);
+- *delete onward* hides everything from the target up to the tombstone event — `turn-error`, “retried model request”, the turn action bar all go with it — while **content you send afterwards is untouched**;
+- because the state is derived from the durable log, reloads, restarts, and tombstones created before you even installed the plugin all behave identically. Hidden rows carry `data-mcr-hidden`, so only rows this plugin hid get restored — the shipped `hidden` attribute is never touched.
+
+The UI half shadows no shipped renderer. It mounts headlessly into `conversation.input.overlay` (a session-scoped seat) and decorates rows through the official flow markers (`[data-chat-flow]`, `data-chat-flow-key`, `data-chat-flow-kind`). **A row is decorated only when its key resolves to a durable message in this Session's Chat store** — so a different conversation open in the Sidebar gets no buttons and cannot be targeted by mistake.
+
+## Limits and notes
+
+- **Not while the Agent runs**: no buttons appear, and hitting the endpoint directly still goes through `agent.runMaintenance`, which answers `423 AGENT_BUSY` immediately rather than quietly queueing.
+- After a whole turn is removed, that turn may be left with only its action bar (projected from `turn/start`/`turn/end`, which are log-only). Those orphan bars are hidden, with the note staying in place. A turn that still has content keeps its bar.
+- History already folded by **compaction** cannot be removed message by message; the plugin reports “this step is interleaved (likely compacted)” instead of half-doing it.
+- The system prompt (surface node 0) can never be recalled or deleted.
+- **Recall/delete is not undoable.** The original text remains in the log (recoverable by hand from the session log), but it is gone from the transcript and the model context.
+- Only the current Session's rows are handled. Subagent windows show the buttons too, and they act on the Session actually open there.
+
+## HTTP interface
+
+For further development. A plain exact route on `webServer`, no Typert involved:
+
+```
+POST /dsh-message-recall
+Content-Type: application/json
+
+{ "sessionId": "session-…", "action": "recall" | "delete" | "deleteFrom",
+  "seq": 42 }            // or "messageId": "…"
+```
+
+Every reply is `{ ok: true, value }` or `{ ok: false, error: { code, message } }`.
+
+| code | HTTP | meaning |
+| --- | --- | --- |
+| `INVALID_REQUEST` | 400 | missing target or unknown action |
+| `AGENT_BUSY` | 423 | that Session's Agent has active work |
+| `SESSION_NOT_LIVE` | 409 | no live Agent for that Session (open it first) |
+| `TARGET_NOT_FOUND` | 409 | not on the current surface (already removed, compacted, or not yet durable) |
+| `NOT_A_USER_MESSAGE` | 409 | tried to recall a message you did not send |
+| `NOT_DELETABLE` | 409 | the target is the system prompt |
+| `SPAN_NOT_CONTIGUOUS` | 409 | the step is interleaved and cannot be removed atomically |
+
+## Development
+
+```bash
+npm install            # pulls the peerDependencies (dsh-session / dsh-llm)
+node scripts/verify.mjs          # Host: tombstones, step expansion, truncation, guards on a real dsh-session + HTTP end to end
+node scripts/verify-client.mjs   # Client: a hand-built DOM covering decoration, two-click confirm, error copy, notes, locale switch
+```
+
+The two most valuable assertions in `verify.mjs`:
+
+- `foldSurface(events).nodes === session.surface.nodes` — replay matches the live surface exactly, which is what guarantees “it stays gone after a restart”;
+- `handleRecallRequest` driven against a real `Session`, checking the 200/405/409/415/423 envelopes.
+
+One trap when iterating: **the Host reads `lib/client.js` into memory at mount time**, so editing the file alone does not change what the page downloads — disable + enable the plugin (or restart), then reload. A build stamp is logged on load for exactly this reason: `[message-recall] client bundle <BUILD>`.
+
+### Layout
+
+```
+lib/main.js            Host: route + tombstone writer
+lib/client.js          Client: hand-written window.__ModuleLoader__ bundle, no build step
+cordis.patch.yml       registers the message-recall row
+scripts/verify*.mjs    offline checks
+```
+
+## Credits
+
+Neighbouring work that informed the design: [dsh-turn-hard-delete](https://github.com/shuanzhe/dsh-turn-hard-delete) (whole-turn hard delete over the same `surfaceOp` replace), [dsh-rewind](https://github.com/SiriLee/dsh-rewind) (in-window rewind plus workspace restore), and `dsh-plugin-session-delete` (session-level deletion). What this one adds: per-message granularity, automatic step expansion to keep provider pairing intact, and a transcript-hiding layer derived from the durable log.
+
+## Licence
+
+MIT

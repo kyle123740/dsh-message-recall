@@ -1,0 +1,5 @@
+# Normalize line endings so the published tree is LF regardless of a
+# contributor's core.autocrlf.
+* text=auto eol=lf
+*.png binary
+*.ico binary

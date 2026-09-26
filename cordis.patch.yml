@@ -1,0 +1,6 @@
+# dsh-message-recall bundle patch: registers the plugin row.
+# Applied as a profile layer after dsh-base and dsh-web-app.
+
+- insert:
+    - id: message-recall
+      name: 'dsh-message-recall'
