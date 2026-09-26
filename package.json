@@ -47,7 +47,7 @@
       "patch": "./cordis.patch.yml"
     },
     "engines": {
-      "dsh": ">=0.1.5-rc.2"
+      "dsh": ">=0.1.7-alpha.1"
     },
     "client": {
       "platform": "web",
@@ -60,8 +60,8 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-llm": ">=0.1.5-rc.2",
-    "@deepseek-ai/dsh-session": ">=0.1.5-rc.2"
+    "@deepseek-ai/dsh-llm": ">=0.1.7-alpha.1",
+    "@deepseek-ai/dsh-session": ">=0.1.7-alpha.1"
   },
   "scripts": {
     "verify": "node scripts/verify.mjs",

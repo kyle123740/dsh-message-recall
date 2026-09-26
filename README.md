@@ -22,6 +22,34 @@ AI 的回复                [ 删除 ]  [ 删除此处及之后 ]
 | **删除** | 任意一条消息（AI 回复、工具行都能删） | 删 AI 回复时**连带它这一步的工具结果**一起删 —— 一个 step = 一次模型调用 + 它请求的工具执行；只删一半会让下一次请求因 call/result 配不上对而报错。点工具行会反查到它所属的那条回复，一起删。属危险动作，需**点两下**确认。 |
 | **删除此处及之后** | 任意一条消息 | 从这条起截断到会话末尾，就地清空后半段。 |
 
+## 适配版本
+
+| | |
+| --- | --- |
+| **实测通过** | DSH **0.1.7** 线 —— 桌面版 core `@deepseek-ai/dsh-base 0.1.7-rc.2`，插件解析到的 peer 包 `0.1.7-alpha.2`，Node 22.23 |
+| **声明下限** | `dsh >= 0.1.7-alpha.1`（写在 `package.json` 的 `dsh.engines.dsh`，宿主安装时会拿它做兼容性拦截） |
+| **未验证** | 0.1.6 及更早。不是「已知会坏」，是没测过，所以不放行 |
+
+查你自己的版本：
+
+```bash
+dsh --version
+```
+
+本插件依赖的宿主接口，升级 DSH 后若功能异常，先对照这几处：
+
+| 接口 | 用途 | 可用性 |
+| --- | --- | --- |
+| `Session.append("user/message", …, { surfaceOp: { op: "replace", … }, sourceEventSeqs })` | 写墓碑 | dsh-session 0.1.x 起（与官方 compaction 同源机制） |
+| `isReplacementSurfaceEvent`，子路径 `@deepseek-ai/dsh-session/surface` | 区分替换事件 | 同上 |
+| `agent.runMaintenance` | 与正在执行的 step 抢锁 | dsh-agent 0.1.x |
+| `webServer.register({ kind: "exact" })` | HTTP 路由 | dsh-host-webserver |
+| 座位 `conversation.input.overlay` | 客户端无头挂载点 | dsh-client-ui-conversation 0.1.7 |
+| DOM 标记 `data-chat-flow` / `-key` / `-kind` / `data-chat-turn` | 行装饰与遮蔽 | 0.1.x（`data-chat-turn` 自 rc.6 起就被社区插件依赖） |
+| `ctx.sessions.binding(id).eventSource` | 读墓碑 | 0.1.7 面；代码保留 `sessions.get(id)` 回退到旧面 |
+
+一个真实的跨实例事实：插件的 peer 包与宿主 core **可能不是同一份模块实例**（本机就是 0.1.7-rc.2 的 core 在跑 0.1.7-alpha.2 的包）。之所以安全，是因为本插件只碰**结构化数据** —— `createUserMessage` 产出的是普通冻结对象，surface 校验走 JSON 而不是 `instanceof`。如果你的环境报 peer 不兼容，别去硬改 `engines`，先跑一遍 `npm test` 看接口还在不在。
+
 ## 安装
 
 在 DSH 内置终端（或任意能跑 `dsh` 的终端）里：

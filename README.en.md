@@ -22,6 +22,34 @@ tool row                     [ Delete ]  [ Delete onward ]
 | **Delete** | any message (AI answers and tool rows included) | Deleting an AI answer also removes **the tool results of that step** — one step is one model call plus the tool executions it requested, and half-removing it would break the provider's call/result pairing on the next request. Clicking a tool row resolves back to the answer that owns it. Destructive: **two clicks** to confirm. |
 | **Delete onward** | any message | Truncates the conversation from that message to the end, in place. |
 
+## Compatibility
+
+| | |
+| --- | --- |
+| **Tested** | the DSH **0.1.7** line — desktop core `@deepseek-ai/dsh-base 0.1.7-rc.2`, peer packages resolved by the plugin `0.1.7-alpha.2`, Node 22.23 |
+| **Declared floor** | `dsh >= 0.1.7-alpha.1` (in `package.json` → `dsh.engines.dsh`, which the host enforces at install time) |
+| **Unverified** | 0.1.6 and older. Not "known broken" — never tried, so not allowed |
+
+Check your own version:
+
+```bash
+dsh --version
+```
+
+Host interfaces this plugin leans on. If something breaks after a DSH upgrade, start here:
+
+| Interface | Used for | Availability |
+| --- | --- | --- |
+| `Session.append("user/message", …, { surfaceOp: { op: "replace", … }, sourceEventSeqs })` | writing the tombstone | dsh-session 0.1.x onward (the same mechanism official compaction uses) |
+| `isReplacementSurfaceEvent`, subpath `@deepseek-ai/dsh-session/surface` | telling a replacement apart | same |
+| `agent.runMaintenance` | locking against a step in flight | dsh-agent 0.1.x |
+| `webServer.register({ kind: "exact" })` | the HTTP route | dsh-host-webserver |
+| seat `conversation.input.overlay` | the headless client mount | dsh-client-ui-conversation 0.1.7 |
+| DOM markers `data-chat-flow` / `-key` / `-kind` / `data-chat-turn` | decorating and hiding rows | 0.1.x (`data-chat-turn` has been relied on by community plugins since rc.6) |
+| `ctx.sessions.binding(id).eventSource` | reading tombstones | the 0.1.7 face; the code falls back to `sessions.get(id)` for the older one |
+
+One honest cross-instance note: the plugin's peer packages and the host core **may be different module instances** (on the machine this was built on, a 0.1.7-rc.2 core runs against 0.1.7-alpha.2 packages). That is safe here only because the plugin touches structured data — `createUserMessage` returns a plain frozen object and surface validation goes through JSON, not `instanceof`. If your install reports a peer conflict, don't force `engines` wider: run `npm test` first and see whether the interfaces are still there.
+
 ## Install
 
 From the DSH built-in terminal (or any terminal with `dsh`):
