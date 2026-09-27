@@ -375,7 +375,9 @@ globalThis.fetch = async (path, init) => {
 };
 
 console.log("== tombstone notes ==");
-const tombstone = (seq, source) => ({ type: "event", event: { seq, type: "user/message", surfaceOp: { op: "replace", startSeq: source.removed[0], endSeq: source.removed.at(-1) }, data: { content: [], source: { kind: "plugin", plugin: "message-recall", ...source } } } });
+// The durable shape: `kind` must be a producer-owned kind (v4 refuses "plugin"),
+// so the plugin's identity rides on `producer`.
+const tombstone = (seq, source) => ({ type: "event", event: { seq, type: "user/message", surfaceOp: { op: "replace", startSeq: source.removed[0], endSeq: source.removed.at(-1) }, data: { content: [], source: { kind: "user", producer: "message-recall", ...source } } } });
 eventWindow.entries = [
 	tombstone(50, { action: "recall", removed: [2], kinds: ["user"], turn: 1, preview: "把这条撤回", truncated: false }),
 	tombstone(51, { action: "delete", removed: [3, 4], kinds: ["assistant", "tool"], turn: 1, preview: "", truncated: false }),
@@ -513,9 +515,23 @@ const trimmedTombstone = {
 		seq: 94,
 		type: "user/message",
 		surfaceOp: { op: "replace", startSeq: 90, endSeq: 92 },
+		// Legacy shape (pre-v0.1.3): still recognised so a page that already holds
+		// one of these keeps behaving until it reloads.
 		data: { content: [], source: { kind: "plugin", plugin: "message-recall" } },
 	},
 };
+// The durable shape a v0.1.3+ tombstone has on disk, with no plugin fields at all.
+const durableTombstone = {
+	type: "event",
+	event: {
+		seq: 95,
+		type: "user/message",
+		surfaceOp: { op: "replace", startSeq: 90, endSeq: 92 },
+		data: { content: [], source: { kind: "user", producer: "message-recall" } },
+	},
+};
+check("the durable producer shape is recognised without any custom fields", api.tombstonesOf({ entries: [durableTombstone] }).length === 1, api.tombstonesOf({ entries: [durableTombstone] }));
+check("a foreign producer is ignored", api.tombstonesOf({ entries: [{ type: "event", event: { seq: 96, type: "user/message", surfaceOp: { op: "replace", startSeq: 1, endSeq: 1 }, data: { content: [], source: { kind: "user", producer: "compact" } } } }] }).length === 0);
 eventWindow.entries = [trimmedTombstone];
 mount();
 check("hiding survives without source.removed", promptRow.hidden === true && retryRow.hidden === true);

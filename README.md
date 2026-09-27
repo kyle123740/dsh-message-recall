@@ -65,7 +65,7 @@ dsh plugin --profile web add github:kyle123740/dsh-message-recall
 想固定版本（可复现安装）就带上 tag 或 commit：
 
 ```bash
-dsh plugin --profile desktop add github:kyle123740/dsh-message-recall#v0.1.0
+dsh plugin --profile desktop add github:kyle123740/dsh-message-recall#v0.1.3
 ```
 
 安装后**重启该 profile 一次**（Host 半边要重新 import），界面刷新一次（Client 半边要重新取 bundle）。开关也可以随时在「设置 → 插件」里拨动：
@@ -91,6 +91,27 @@ dsh plugin --profile desktop remove dsh-message-recall
 2. 追加一条**空的 `user/message` 墓碑事件**，带 `surfaceOp: { op: 'replace', startSeq, endSeq }` 与 `sourceEventSeqs: [被遮蔽的 seq]`；
 3. surface 是派生模型历史的唯一来源（`Session.deriveMessages`），所以被遮蔽的内容**下一次请求就不会再发给模型**；
 4. 原始事件仍留在日志里；重新打开会话时靠重放 `foldSurface(events)` 得到完全一致的 surface —— 删掉的东西不会「复活」。
+
+### ⚠️ v4 磁盘格式拒绝 `source.kind: "plugin"`（0.1.3 修掉的「静默丢删除」）
+
+这是本项目最值得记下的一课：**surface 替换写对了，不等于落盘成功。**
+
+`dsh-session-format-v3-to-v4` 的原话：
+
+```js
+if (typeof value["kind"] !== "string" || value["kind"].length === 0 || value["kind"] === "plugin")
+    throw new SessionFormatError("format v4 message requires a producer-owned source kind");
+```
+
+`source.kind` 必须是**生产者自己的** kind（`user` / `model` / `tool` / `compact-checkpoint` …），`"plugin"` 被明确拒绝。v0.1.0–0.1.2 的墓碑用的正是 `kind: "plugin"` + `plugin: "message-recall"`，于是：
+
+1. 事件能 append 进内存日志（`Session.append` 不做这项校验），界面拿到它、占位行照常显示；
+2. flush 时持久化编码器对**整批**抛错 → 一条都没写进磁盘；
+3. 重启后从磁盘重建 → 删除**消失**，被删内容回到界面**和模型上下文**。
+
+现象就是「点完当场生效、重启后内容又回来」。v0.1.3 起墓碑声明 `kind: "user"`（它本来就是 user 角色的空消息；`user/message` 在 v4 里**不要求处于开启的 turn/step 内**，所以追加在 `turn/end` 之后合法），插件身份改放 `producer: "message-recall"`。客户端两种形状都认，页面上残留的旧墓碑不会突然失效。
+
+回归用 [scripts/verify-persistence.mjs](scripts/verify-persistence.mjs) 钉住：它把墓碑写进**真实** `@deepseek-ai/dsh-session-persistence-jsonl` 后端的临时目录、flush、再从磁盘读回，断言「事件全数往返 / 墓碑在盘上 / replace 语义保留 / 重放 surface 与实时一致 / 重开会话不再派生被删文本」，最后一条负向断言专门验证 `kind: "plugin"` 会被格式拒绝。
 
 两个关键细节，都是这个插件踩过之后才写明白的：
 
@@ -141,14 +162,30 @@ Content-Type: application/json
 
 ```bash
 npm install            # 拉 peerDependencies（dsh-session / dsh-llm）
-node scripts/verify.mjs          # Host：真实 dsh-session 上的墓碑、整步展开、截断、守卫 + HTTP 端到端
-node scripts/verify-client.mjs   # Client：最小 DOM 桩跑通行装饰、两下确认、错误本地化、占位行、语言切换
+node scripts/verify.mjs              # Host：真实 dsh-session 上的墓碑、整步展开、截断、守卫 + HTTP 端到端
+node scripts/verify-persistence.mjs  # 持久化：真实 JSONL 后端往返（写墓碑 → flush → 从磁盘读回 → 重放）
+node scripts/verify-client.mjs       # Client：最小 DOM 桩跑通行装饰、两下确认、错误本地化、占位行、语言切换
+npm test                             # 三套一起跑
 ```
 
 `verify.mjs` 里最值钱的两条断言：
 
 - `foldSurface(events).nodes === session.surface.nodes` —— 日志重放与实时 surface 完全一致（保证「重启后不会复活」）；
 - 用真实 `Session` 对象打 `handleRecallRequest`，核对 200/405/409/415/423 信封。
+
+`verify-persistence.mjs` 之所以必须有：**它才是唯一能证明「重启后仍然删除」的测试。** 0.1.0–0.1.2 的 bug 完全躲过了前两套 —— 内存里一切正确，只是没落盘。
+
+### 只读诊断接口
+
+排查线上问题时可以用一个读动作，它不需要活着的 Agent，也会读**磁盘**上的日志：
+
+```bash
+curl -s -X POST http://127.0.0.1:19387/dsh-message-recall \
+  -H 'content-type: application/json' \
+  -d '{"sessionId":"session-…","action":"inspect"}'
+```
+
+返回 `{ live, disk }` 两份摘要：事件数、`maxSeq`、**所有 replace 事件**（含 `plugin`/`op`/`sourceEventSeqs`）、以及按 seq 列出的类型流水。用它对比「内存里有、磁盘上没有」最直接 —— 这次根因就是靠它 + 手写解码器定位的。
 
 改完客户端代码要注意：**Host 在插件挂载那一刻就把 `lib/client.js` 的字节读进内存**，光改文件不会让页面拿到新版；需要 disable + enable 插件（或重启），再刷新界面。仓库里为此埋了版本戳，加载时会在 Console 打一行 `[message-recall] client bundle <BUILD>`。
 

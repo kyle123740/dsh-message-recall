@@ -275,5 +275,48 @@ const coldResponse = mockResponse();
 await handleRecallRequest(noAgentCtx, mockRequest({ sessionId: "session-cold", action: "delete", seq: 1 }), coldResponse);
 check("a Session with no live Agent answers 409 SESSION_NOT_LIVE", coldResponse.status === 409 && JSON.parse(coldResponse.body).error.code === "SESSION_NOT_LIVE", coldResponse.body);
 
+console.log("== the persistence listener's first operation on our event ==");
+// @deepseek-ai/dsh-session-persistence-jsonl buffers with structuredClone(event)
+// inside its `session/event` listener. A throw there is contained by the store
+// ("observer failures are logged and contained"), which would leave the event in
+// memory and never on disk — exactly the reported symptom. So clone it here.
+{
+	const probe = buildSession();
+	const tombstone = probe.session.append("user/message", createUserMessage({
+		content: [],
+		source: { kind: "plugin", plugin: "message-recall", action: "delete", removed: [probe.first.seq], kinds: ["user"], turn: 1, preview: "第一条提问", truncated: false },
+	}), { surfaceOp: { op: "replace", startSeq: probe.first.seq, endSeq: probe.first.seq }, sourceEventSeqs: [probe.first.seq] });
+	let cloneError;
+	try {
+		structuredClone(tombstone);
+	} catch (error) {
+		cloneError = error;
+	}
+	check("structuredClone(tombstoneEvent) does not throw", cloneError === undefined, cloneError === undefined ? undefined : String(cloneError));
+
+	let jsonError;
+	try {
+		const text = JSON.stringify(tombstone);
+		const back = JSON.parse(text);
+		check("the tombstone survives JSON and keeps its surfaceOp", back.surfaceOp?.op === "replace" && back.data?.source?.removed?.[0] === probe.first.seq, back.surfaceOp);
+	} catch (error) {
+		jsonError = error;
+		check("the tombstone survives JSON", false, String(jsonError));
+	}
+
+	// Control: a plain append event from the same session, cloned the same way.
+	let controlError;
+	try {
+		structuredClone(probe.session.snapshotEvents().find((event) => event.type === "user/message"));
+	} catch (error) {
+		controlError = error;
+	}
+	check("structuredClone(plain user/message) does not throw either", controlError === undefined, String(controlError));
+
+	// The tombstone's own data shape, for the record.
+	const source = tombstone.data.source;
+	check("tombstone source keys are plain data", Object.values(source).every((value) => value === null || ["string", "number", "boolean", "object"].includes(typeof value)), Object.keys(source));
+}
+
 console.log(failures.length === 0 ? "\nALL CHECKS PASSED" : `\nFAILURES: ${failures.length} -> ${failures.join("; ")}`);
 process.exit(failures.length === 0 ? 0 : 1);

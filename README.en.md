@@ -65,7 +65,7 @@ dsh plugin --profile web add github:kyle123740/dsh-message-recall
 Pin a version for a reproducible install:
 
 ```bash
-dsh plugin --profile desktop add github:kyle123740/dsh-message-recall#v0.1.0
+dsh plugin --profile desktop add github:kyle123740/dsh-message-recall#v0.1.3
 ```
 
 Then **restart that profile once** (the Host half needs a fresh import) and reload the UI (the Client half is fetched by the page). Toggles live under *Settings → Plugins*, or:
@@ -91,6 +91,27 @@ Nothing dangles: a tombstone is an ordinary log event, so after uninstalling tho
 2. Append one **empty `user/message` tombstone** carrying `surfaceOp: { op: 'replace', startSeq, endSeq }` plus `sourceEventSeqs: [shadowed seqs]`.
 3. The surface is the single source of derived model history (`Session.deriveMessages`), so the shadowed content **is not sent on the next request**.
 4. The original events stay in the log. Reopening the session replays `foldSurface(events)` and lands on exactly the same surface — deleted content does not come back to life.
+
+### ⚠️ The v4 durable format refuses `source.kind: "plugin"` (the silent data loss fixed in 0.1.3)
+
+The single most useful lesson in this repo: **getting the surface replacement right does not mean it reaches disk.**
+
+Straight from `dsh-session-format-v3-to-v4`:
+
+```js
+if (typeof value["kind"] !== "string" || value["kind"].length === 0 || value["kind"] === "plugin")
+    throw new SessionFormatError("format v4 message requires a producer-owned source kind");
+```
+
+`source.kind` must be a **producer-owned** kind (`user` / `model` / `tool` / `compact-checkpoint` …); `"plugin"` is explicitly refused. v0.1.0–0.1.2 wrote exactly that — `kind: "plugin"` plus `plugin: "message-recall"` — so:
+
+1. the event appended fine to the in-memory log (`Session.append` does not check this), the UI received it, and the note rendered;
+2. at flush time the persistence encoder threw for the **whole batch** → nothing was written;
+3. after a restart the log was rebuilt from disk → the deletion was **gone**, and the deleted content was back in the transcript **and in the model context**.
+
+That is the "works when I click it, comes back after a restart" symptom. Since v0.1.3 the tombstone declares `kind: "user"` (it is a user-role message with no content, and `user/message` is **not** required to sit inside an open turn/step in v4, so appending it after `turn/end` is legal) while the plugin's identity rides on `producer: "message-recall"`. The client accepts both shapes, so a stale tombstone already in a page keeps working.
+
+Pinned by [scripts/verify-persistence.mjs](scripts/verify-persistence.mjs): it writes the tombstone through the **real** `@deepseek-ai/dsh-session-persistence-jsonl` backend into a temp root, flushes, reads it back from disk, and asserts that every event round-trips, the tombstone is on disk, the replace semantics survive, the replayed surface equals the live one, and a reopened Session no longer derives the deleted text — plus a negative check that `kind: "plugin"` is refused.
 
 Two details worth knowing, both learned the hard way:
 
@@ -141,9 +162,25 @@ Every reply is `{ ok: true, value }` or `{ ok: false, error: { code, message } }
 
 ```bash
 npm install            # pulls the peerDependencies (dsh-session / dsh-llm)
-node scripts/verify.mjs          # Host: tombstones, step expansion, truncation, guards on a real dsh-session + HTTP end to end
-node scripts/verify-client.mjs   # Client: a hand-built DOM covering decoration, two-click confirm, error copy, notes, locale switch
+node scripts/verify.mjs              # Host: tombstones, step expansion, truncation, guards on a real dsh-session + HTTP end to end
+node scripts/verify-persistence.mjs  # Persistence: round trip through the real JSONL backend (write → flush → read from disk → replay)
+node scripts/verify-client.mjs       # Client: a hand-built DOM covering decoration, two-click confirm, error copy, notes, locale switch
+npm test                             # all three
 ```
+
+`verify-persistence.mjs` is not optional: **it is the only test that can prove "still deleted after a restart".** The 0.1.0–0.1.2 bug passed the other two suites perfectly — everything was correct in memory, it just never reached disk.
+
+### Read-only diagnostic endpoint
+
+For live troubleshooting, one read action that needs no live Agent and reads the log **on disk**:
+
+```bash
+curl -s -X POST http://127.0.0.1:19387/dsh-message-recall \
+  -H 'content-type: application/json' \
+  -d '{"sessionId":"session-…","action":"inspect"}'
+```
+
+It returns `{ live, disk }` summaries: event count, `maxSeq`, every replace event (with `plugin`/`op`/`sourceEventSeqs`), and the per-seq type stream. Comparing "in memory" against "on disk" is what isolated this bug.
 
 The two most valuable assertions in `verify.mjs`:
 
