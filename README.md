@@ -65,7 +65,7 @@ dsh plugin --profile web add github:kyle123740/dsh-message-recall
 想固定版本（可复现安装）就带上 tag 或 commit：
 
 ```bash
-dsh plugin --profile desktop add github:kyle123740/dsh-message-recall#v0.1.3
+dsh plugin --profile desktop add github:kyle123740/dsh-message-recall#v0.1.4
 ```
 
 安装后**重启该 profile 一次**（Host 半边要重新 import），界面刷新一次（Client 半边要重新取 bundle）。开关也可以随时在「设置 → 插件」里拨动：

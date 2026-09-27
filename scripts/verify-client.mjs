@@ -220,6 +220,8 @@ const inputActions = {
 };
 
 const registered = { locale: [], slots: [] };
+/** Teardown callbacks collected from ctx.effect, newest last. */
+const disposers = [];
 let activeLocale = "zh-CN";
 const ctx = {
 	locale: {
@@ -239,7 +241,11 @@ const ctx = {
 			return { options, component };
 		},
 	},
-	effect: (value) => (typeof value === "function" ? value() : value),
+	effect: (value) => {
+		const result = typeof value === "function" ? value() : value;
+		if (typeof result === "function") disposers.push(result);
+		return result;
+	},
 	get: (name) => (name === "sessions" ? sessions : undefined),
 };
 ctx.sessions = sessions;
@@ -573,6 +579,30 @@ api.apply(ctx);
 check("no extra slot registration from a repeat apply", registered.slots.length === seatsBefore, { seatsBefore, after: registered.slots.length });
 check("the guard lives on the global", globalThis.__DSH_MESSAGE_RECALL_APPLIED__ === true);
 check("only one seat was ever registered", seatsBefore === 1, seatsBefore);
+
+console.log("== the guard releases on dispose, so a re-apply works ==");
+// Toggling the plugin in Settings unloads and re-applies the client half. A guard
+// that never releases would leave the page with no buttons until a reload — which
+// is exactly the regression this pins down.
+for (const dispose of [...disposers].reverse()) dispose();
+check("disposing cleared the guard", globalThis.__DSH_MESSAGE_RECALL_APPLIED__ === false);
+disposers.length = 0;
+api.apply(ctx);
+check("a re-apply registers the seat again", registered.slots.length === seatsBefore + 1, { before: seatsBefore, after: registered.slots.length });
+check("the guard is set again", globalThis.__DSH_MESSAGE_RECALL_APPLIED__ === true);
+
+console.log("== the client half survives a missing session face ==");
+// Row decoration must not depend on the sessions lookup: a plugin with no buttons
+// because one optional service was late is a plugin that looks broken.
+globalThis.__DSH_MESSAGE_RECALL_APPLIED__ = false;
+for (const dispose of [...disposers].reverse()) dispose();
+disposers.length = 0;
+api.apply({ ...ctx, sessions: undefined, get: () => undefined });
+check("apply still registers without a sessions service", registered.slots.length === seatsBefore + 2, registered.slots.length);
+const noSessionSeat = registered.slots.at(-1).seat;
+noSessionSeat.component({ sessionId: "session-x", useChat, useSession, inputActions, kit: {}, ...noSessionSeat.options.inject() });
+check("rows are still decorated without sessions", toolsOf(userRow) !== null, toolsOf(userRow) === null ? "no cluster" : undefined);
+check("the debug hook reports the missing window instead of dying", globalThis.__MCR_DEBUG__?.eventSource === false, globalThis.__MCR_DEBUG__);
 
 console.log(failures.length === 0 ? "\nALL CLIENT CHECKS PASSED" : `\nFAILURES: ${failures.length} -> ${failures.join("; ")}`);
 process.exit(failures.length === 0 ? 0 : 1);
