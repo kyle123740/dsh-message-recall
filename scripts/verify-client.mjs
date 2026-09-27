@@ -312,12 +312,14 @@ chatNodes.set("k-user", { key: "k-user", kind: "user", anchorSeq: 2, data: { seq
 chatNodes.set("k-answer", { key: "k-answer", kind: "assistant-step", anchorSeq: 3, data: { finalNode: { seq: 3, messageId: "m-3" } } });
 chatNodes.set("k-tool", { key: "k-tool", kind: "tool-call", anchorSeq: 4, data: { root: { kind: "tool-result", node: { seq: 4 } } } });
 chatNodes.set("k-tail", { key: "k-tail", kind: "turn-tail", anchorSeq: 5, data: { turn: 1, seq: 5 } });
+chatNodes.set("k-later", { key: "k-later", kind: "user", anchorSeq: 60, data: { seq: 60, content: [{ type: "text", text: "后面的消息" }] } });
 chatSnapshot.order = [...chatNodes.keys()];
 
 const userRow = makeRow("k-user", "user", 1);
 const answerRow = makeRow("k-answer", "assistant-step", 1);
 const toolRow = makeRow("k-tool", "tool-call", 1);
 const tailRow = makeRow("k-tail", "turn-tail", 1);
+const laterRow = makeRow("k-later", "user", 3);
 
 /** Mount through the registered entry, adding the framework's `inject` face. */
 const mount = (extra = {}) => seat.seat.component({
@@ -380,7 +382,7 @@ globalThis.fetch = async (path, init) => {
 	return { ok: true, status: 200, json: async () => ({ ok: true, value: { seq: 900 + calls.length, ...body } }) };
 };
 
-console.log("== tombstone notes ==");
+console.log("== tombstones hide rows and leave no placeholder ==");
 // The durable shape: `kind` must be a producer-owned kind (v4 refuses "plugin"),
 // so the plugin's identity rides on `producer`.
 const tombstone = (seq, source) => ({ type: "event", event: { seq, type: "user/message", surfaceOp: { op: "replace", startSeq: source.removed[0], endSeq: source.removed.at(-1) }, data: { content: [], source: { kind: "user", producer: "message-recall", ...source } } } });
@@ -390,37 +392,26 @@ eventWindow.entries = [
 	tombstone(52, { action: "deleteFrom", removed: [8], kinds: ["user"], turn: 2, preview: "很长很长的一段原文", truncated: true }),
 ];
 mount();
-const notes = flow.querySelectorAll(".dsh-mcr-note");
-check("one note per tombstone", notes.length === 3, notes.length);
-check("notes carry their tombstone seq", notes.map((note) => note.dataset.note).join(",") === "50,51,52", notes.map((note) => note.dataset.note));
-check("recall note shows the preview text", notes[0].textContent.includes("把这条撤回"), notes[0].textContent);
-check("recall note offers 重新编辑 + 复制原文", notes[0].querySelectorAll(".dsh-mcr-note-act").length === 2, notes[0].children.map((node) => node.textContent));
-check("delete note names what went away", notes[1].textContent.includes("回复") && notes[1].textContent.includes("工具"), notes[1].textContent);
-check("deleteFrom note offers 复制原文 only", notes[2].querySelectorAll(".dsh-mcr-note-act").length === 1, notes[2].children.map((node) => node.textContent));
-check("deleteFrom note lands in its own turn", notes[2].dataset.action === "deleteFrom", notes[2].dataset);
-check("notes sit after the rows of their turn", flow.children.indexOf(notes[0]) > flow.children.indexOf(tailRow), flow.children.map((node) => node.dataset.note ?? node.dataset.chatFlowKey));
+// A deletion must read as a deletion: no inline note, no preview of the removed
+// text left behind in the transcript.
+check("no placeholder rows are rendered anywhere", document.body.querySelectorAll(".dsh-mcr-note").length === 0, document.body.querySelectorAll(".dsh-mcr-note").length);
+check("the recalled row is hidden", userRow.hidden === true);
+check("the deleted step's rows are hidden", answerRow.hidden === true && toolRow.hidden === true);
+check("hidden rows carry our marker", userRow.dataset.mcrHidden === "1");
+check("hidden rows lose their cluster", toolsOf(userRow) === null);
+check("the deleted text is nowhere in the DOM", !document.body.descendants().some((node) => node._text?.includes("把这条撤回")), document.body.descendants().map((node) => node._text).filter(Boolean).slice(0, 8));
+// Turn 1 lost every content row, so its action bar goes with them (orphan rule);
+// a later, untouched turn keeps its own bar.
+check("a fully deleted turn also loses its action bar", tailRow.hidden === true);
+check("a turn outside every range keeps its bar", laterRow.hidden === false);
 
-console.log("== note actions ==");
-inputActions.drafts.length = 0;
-notes[0].querySelectorAll(".dsh-mcr-note-act")[0].click();
-check("重新编辑 refills the composer", inputActions.drafts.at(-1) === "把这条撤回", inputActions.drafts);
-const copied = [];
-globalThis.navigator.clipboard = { writeText: (text) => {
-	copied.push(text);
-	return Promise.resolve();
-} };
-notes[2].querySelectorAll(".dsh-mcr-note-act")[0].click();
-check("复制原文 copies the stored preview", copied.at(-1) === "很长很长的一段原文", copied);
-
-console.log("== stale notes are dropped ==");
-eventWindow.entries = [tombstone(50, { action: "recall", removed: [2], kinds: ["user"], turn: 1, preview: "把这条撤回", truncated: false })];
-mount();
-check("only the live tombstone remains", flow.querySelectorAll(".dsh-mcr-note").length === 1, flow.querySelectorAll(".dsh-mcr-note").length);
-check("its shadowed row leaves the flow", userRow.hidden === true && userRow.querySelector(":scope > .dsh-mcr-tools") === null);
+console.log("== clearing the tombstones restores the rows ==");
 eventWindow.entries = [];
 mount();
-check("dropping the tombstone brings the row back", userRow.hidden === false && userRow.dataset.mcrHidden === undefined);
-check("and the cluster returns", toolsOf(userRow) !== null);
+check("rows come back", userRow.hidden === false && answerRow.hidden === false && toolRow.hidden === false);
+check("the marker is gone too", userRow.dataset.mcrHidden === undefined);
+check("clusters return", toolsOf(userRow) !== null && toolsOf(answerRow) !== null);
+check("still no placeholder rows", document.body.querySelectorAll(".dsh-mcr-note").length === 0);
 
 console.log("== foreign replacements are ignored ==");
 const foreignEntries = [
@@ -467,11 +458,10 @@ const orphanTail = makeRow("k-tail-7", "turn-tail", 7);
 eventWindow.entries = [tombstone(80, { action: "deleteFrom", removed: [70, 71], kinds: ["user", "assistant"], turn: 7, preview: "", truncated: false })];
 mount();
 check("orphan turn-tail row hidden", orphanTail.hidden === true);
-check("the note still marks the emptied turn", flow.querySelector('.dsh-mcr-note[data-note="80"]') !== null);
+check("no placeholder is left behind", flow.querySelectorAll(".dsh-mcr-note").length === 0);
 eventWindow.entries = [];
 mount();
 check("action bar returns when nothing was removed", orphanTail.hidden === false);
-check("note goes with its tombstone", flow.querySelector('.dsh-mcr-note[data-note="80"]') === null);
 const filledTail = tailRow;
 check("a Turn that still has content keeps its action bar", filledTail.hidden === false);
 
@@ -505,7 +495,7 @@ check("the turn's action bar inside the truncate goes too", barRow.hidden === tr
 check("content after the tombstone stays", afterRow.hidden === false);
 check("hidden rows are marked as ours", promptRow.dataset.mcrHidden === "1");
 check("a hidden row loses its cluster", promptRow.querySelector(":scope > .dsh-mcr-tools") === null);
-check("the truncate note still renders", flow2.querySelector('.dsh-mcr-note[data-note="94"]') !== null);
+check("the truncate leaves no placeholder either", flow2.querySelectorAll(".dsh-mcr-note").length === 0);
 eventWindow.entries = [];
 mount();
 check("clearing the tombstone brings the rows back", promptRow.hidden === false && retryRow.hidden === false && promptRow.dataset.mcrHidden === undefined);

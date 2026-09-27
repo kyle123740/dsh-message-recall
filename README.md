@@ -18,7 +18,7 @@ AI 的回复                [ 删除 ]  [ 删除此处及之后 ]
 
 | 动作 | 适用范围 | 行为 |
 | --- | --- | --- |
-| **撤回** | 只限**你自己发出**的消息（含运行中插话 steering） | 该消息从模型上下文与界面移除，**原文自动回填输入框**，改好可直接重发。原位留一行「你撤回了一条消息 · 原文预览」，带「重新编辑 / 复制原文」。 |
+| **撤回** | 只限**你自己发出**的消息（含运行中插话 steering） | 该消息从模型上下文与界面移除，**原文自动回填输入框**，改好可直接重发。对话里不留任何痕迹。 |
 | **删除** | 任意一条消息（AI 回复、工具行都能删） | 删 AI 回复时**连带它这一步的工具结果**一起删 —— 一个 step = 一次模型调用 + 它请求的工具执行；只删一半会让下一次请求因 call/result 配不上对而报错。点工具行会反查到它所属的那条回复，一起删。属危险动作，需**点两下**确认。 |
 | **删除此处及之后** | 任意一条消息 | 从这条起截断到会话末尾，就地清空后半段。 |
 
@@ -65,7 +65,7 @@ dsh plugin --profile web add github:kyle123740/dsh-message-recall
 想固定版本（可复现安装）就带上 tag 或 commit：
 
 ```bash
-dsh plugin --profile desktop add github:kyle123740/dsh-message-recall#v0.1.4
+dsh plugin --profile desktop add github:kyle123740/dsh-message-recall#v0.1.6
 ```
 
 安装后**重启该 profile 一次**（Host 半边要重新 import），界面刷新一次（Client 半边要重新取 bundle）。开关也可以随时在「设置 → 插件」里拨动：
@@ -83,7 +83,18 @@ dsh plugin --profile desktop enable  dsh-message-recall
 dsh plugin --profile desktop remove dsh-message-recall
 ```
 
-拔除不残留状态：墓碑只是普通日志事件，卸载后那些位置不再显示占位行，会话照常可读。
+拔除不残留状态：墓碑只是普通日志事件，卸载后那些位置不再被隐藏（被删内容会重新出现在界面里），会话照常可读。
+
+## 删除后在界面上留下什么
+
+**什么都不留。** 撤回/删除不会在对话里插入任何占位行或提示 —— 被删的行直接从转录本消失，就像它们从未存在过。这也是 0.1.6 的行为变化：更早的版本会在原位留一行「已删除此处及之后的全部内容 · 原文预览」，既制造视觉噪音，又会把你想删掉的文本片段长期留在对话里。
+
+代价是**界面上再也无法「撤销查看」被删了什么**。原文并没有销毁 —— 它仍在会话日志里（`$DSH_HOME/sessions/<项目>/<会话id>/session.v4.jsonl.zstd`，append-only），仓库里带了几个只读脚本来读它：
+
+```bash
+node scripts/explain-session.mjs <日志路径>   # 列出墓碑、它覆盖的区间、区间内/后各有哪些事件
+node scripts/scan-replace.mjs <会话根目录>    # 扫描所有会话，找出哪些含墓碑（HAS-TOMBSTONES）
+```
 
 ## 工作原理
 
@@ -105,7 +116,7 @@ if (typeof value["kind"] !== "string" || value["kind"].length === 0 || value["ki
 
 `source.kind` 必须是**生产者自己的** kind（`user` / `model` / `tool` / `compact-checkpoint` …），`"plugin"` 被明确拒绝。v0.1.0–0.1.2 的墓碑用的正是 `kind: "plugin"` + `plugin: "message-recall"`，于是：
 
-1. 事件能 append 进内存日志（`Session.append` 不做这项校验），界面拿到它、占位行照常显示；
+1. 事件能 append 进内存日志（`Session.append` 不做这项校验），界面拿到它并据此隐藏对应的行；
 2. flush 时持久化编码器对**整批**抛错 → 一条都没写进磁盘；
 3. 重启后从磁盘重建 → 删除**消失**，被删内容回到界面**和模型上下文**。
 
@@ -128,7 +139,7 @@ if (typeof value["kind"] !== "string" || value["kind"].length === 0 || value["ki
 ## 边界与注意
 
 - **Agent 正在跑时不能改**：按钮不出现；即使绕过界面直接打接口，Host 也走 `agent.runMaintenance`，忙时立刻回 `423 AGENT_BUSY`，而不是悄悄排队。
-- 删完整轮后，那一轮可能只剩 `turn/start`/`turn/end` 投影出来的空操作栏（它们是日志事件，不在 surface 里）；插件会把这种孤栏 `hidden` 掉，占位说明留在原位。那一轮若还有别的内容，操作栏保持不动。
+- 删完整轮后，那一轮可能只剩 `turn/start`/`turn/end` 投影出来的空操作栏（它们是日志事件，不在 surface 里）；插件会把这种孤栏一并 `hidden` 掉。那一轮若还有别的内容，操作栏保持不动。
 - 被**压缩**过的历史（compaction 之后的旧轮次）其 surface 节点已被折叠，无法单独删除；插件会明确报「这一步与其它内容交错（可能已被压缩）」，而不是悄悄做一半。
 - 系统提示（surface node 0）永远不能撤回或删除。
 - **撤回/删除不可撤销**：日志里原文还在（必要时可读会话日志手工找回），但界面与模型上下文里不会再出现。
@@ -164,7 +175,7 @@ Content-Type: application/json
 npm install            # 拉 peerDependencies（dsh-session / dsh-llm）
 node scripts/verify.mjs              # Host：真实 dsh-session 上的墓碑、整步展开、截断、守卫 + HTTP 端到端
 node scripts/verify-persistence.mjs  # 持久化：真实 JSONL 后端往返（写墓碑 → flush → 从磁盘读回 → 重放）
-node scripts/verify-client.mjs       # Client：最小 DOM 桩跑通行装饰、两下确认、错误本地化、占位行、语言切换
+node scripts/verify-client.mjs       # Client：最小 DOM 桩跑通行装饰、两下确认、错误本地化、行遮蔽、语言切换
 npm test                             # 三套一起跑
 ```
 
@@ -207,7 +218,7 @@ GET /plugins/??dsh-message-recall/client.js&rev=<rev>
 JSON.stringify(window.__MCR_DEBUG__, null, 1)
 ```
 
-这是每次同步后留下的快照，直接回答三个问题：墓碑事件有没有从日志读回来（`notes`，含 `startSeq/endSeq/removed`）、每行解析到的持久 seq 是多少（`rows[].anchor`）、它有没有被判成遮蔽（`shadowed`）。提 issue 时把这段贴上来，基本一眼定位。
+这是每次同步后留下的快照，直接回答三个问题：墓碑事件有没有从日志读回来（`tombstones`，含 `startSeq/endSeq/removed`）、每行解析到的持久 seq 是多少（`rows[].anchor`）、它有没有被判成遮蔽（`shadowed`）。提 issue 时把这段贴上来，基本一眼定位。
 
 **遮蔽的权威来源是墓碑事件自己的 `surfaceOp.startSeq/endSeq`**，不是插件写在 `source` 上的自定义字段 —— 历史分页是日志的再编码投影，自定义字段属于「可能被动到」的那一类。早期版本只信 `source.removed`，于是出现了「点完当场生效、重启后内容又回来」这种**只在重载路径上发作**的现象（v0.1.1 修掉，并加了回归用例）。
 

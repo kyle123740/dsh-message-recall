@@ -18,7 +18,7 @@ tool row                     [ Delete ]  [ Delete onward ]
 
 | Action | Applies to | What it does |
 | --- | --- | --- |
-| **Recall** | only messages **you** sent (including steering inserts sent mid-run) | The message leaves the model context and the transcript, and its **original text is dropped back into the composer** so you can edit and resend. An inline note stays where it was: “You recalled a message · preview”, with *Edit again* / *Copy text*. |
+| **Recall** | only messages **you** sent (including steering inserts sent mid-run) | The message leaves the model context and the transcript, and its **original text is dropped back into the composer** so you can edit and resend. It leaves no trace in the conversation. |
 | **Delete** | any message (AI answers and tool rows included) | Deleting an AI answer also removes **the tool results of that step** — one step is one model call plus the tool executions it requested, and half-removing it would break the provider's call/result pairing on the next request. Clicking a tool row resolves back to the answer that owns it. Destructive: **two clicks** to confirm. |
 | **Delete onward** | any message | Truncates the conversation from that message to the end, in place. |
 
@@ -65,7 +65,7 @@ dsh plugin --profile web add github:kyle123740/dsh-message-recall
 Pin a version for a reproducible install:
 
 ```bash
-dsh plugin --profile desktop add github:kyle123740/dsh-message-recall#v0.1.4
+dsh plugin --profile desktop add github:kyle123740/dsh-message-recall#v0.1.6
 ```
 
 Then **restart that profile once** (the Host half needs a fresh import) and reload the UI (the Client half is fetched by the page). Toggles live under *Settings → Plugins*, or:
@@ -83,7 +83,18 @@ dsh plugin --profile desktop enable  dsh-message-recall
 dsh plugin --profile desktop remove dsh-message-recall
 ```
 
-Nothing dangles: a tombstone is an ordinary log event, so after uninstalling those rows simply stop rendering a note and the session stays readable.
+Nothing dangles: a tombstone is an ordinary log event, so uninstalling simply stops the hiding (the removed content reappears) and the session stays readable.
+
+## What a deletion leaves in the transcript
+
+**Nothing.** Recall and delete insert no placeholder and no notice — the row is simply gone from the transcript, as if it had never been sent. That is the 0.1.6 behaviour change: earlier versions kept an inline line in place (“Deleted this message and everything after it · preview”), which was visual noise *and* left a fragment of the text you wanted gone sitting in the conversation.
+
+The trade-off: the UI can no longer show you what was removed. The text is not destroyed — it stays in the session log (`$DSH_HOME/sessions/<project>/<session-id>/session.v4.jsonl.zstd`, append-only), and the repo ships read-only scripts for it:
+
+```bash
+node scripts/explain-session.mjs <log-path>   # tombstones, the ranges they cover, what is inside/after them
+node scripts/scan-replace.mjs <sessions-root> # find which sessions contain tombstones (HAS-TOMBSTONES)
+```
 
 ## How it works
 
@@ -105,7 +116,7 @@ if (typeof value["kind"] !== "string" || value["kind"].length === 0 || value["ki
 
 `source.kind` must be a **producer-owned** kind (`user` / `model` / `tool` / `compact-checkpoint` …); `"plugin"` is explicitly refused. v0.1.0–0.1.2 wrote exactly that — `kind: "plugin"` plus `plugin: "message-recall"` — so:
 
-1. the event appended fine to the in-memory log (`Session.append` does not check this), the UI received it, and the note rendered;
+1. the event appended fine to the in-memory log (`Session.append` does not check this), the UI received it and hid the matching rows;
 2. at flush time the persistence encoder threw for the **whole batch** → nothing was written;
 3. after a restart the log was rebuilt from disk → the deletion was **gone**, and the deleted content was back in the transcript **and in the model context**.
 
@@ -128,7 +139,7 @@ The UI half shadows no shipped renderer. It mounts headlessly into `conversation
 ## Limits and notes
 
 - **Not while the Agent runs**: no buttons appear, and hitting the endpoint directly still goes through `agent.runMaintenance`, which answers `423 AGENT_BUSY` immediately rather than quietly queueing.
-- After a whole turn is removed, that turn may be left with only its action bar (projected from `turn/start`/`turn/end`, which are log-only). Those orphan bars are hidden, with the note staying in place. A turn that still has content keeps its bar.
+- After a whole turn is removed, that turn may be left with only its action bar (projected from `turn/start`/`turn/end`, which are log-only). Those orphan bars are hidden too. A turn that still has content keeps its bar.
 - History already folded by **compaction** cannot be removed message by message; the plugin reports “this step is interleaved (likely compacted)” instead of half-doing it.
 - The system prompt (surface node 0) can never be recalled or deleted.
 - **Recall/delete is not undoable.** The original text remains in the log (recoverable by hand from the session log), but it is gone from the transcript and the model context.
@@ -164,7 +175,7 @@ Every reply is `{ ok: true, value }` or `{ ok: false, error: { code, message } }
 npm install            # pulls the peerDependencies (dsh-session / dsh-llm)
 node scripts/verify.mjs              # Host: tombstones, step expansion, truncation, guards on a real dsh-session + HTTP end to end
 node scripts/verify-persistence.mjs  # Persistence: round trip through the real JSONL backend (write → flush → read from disk → replay)
-node scripts/verify-client.mjs       # Client: a hand-built DOM covering decoration, two-click confirm, error copy, notes, locale switch
+node scripts/verify-client.mjs       # Client: a hand-built DOM covering decoration, two-click confirm, error copy, row hiding, locale switch
 npm test                             # all three
 ```
 
@@ -207,7 +218,7 @@ Run this in the page console:
 JSON.stringify(window.__MCR_DEBUG__, null, 1)
 ```
 
-It is the snapshot left by the last sync pass and answers three questions directly: did the tombstones come back from the log (`notes`, with `startSeq/endSeq/removed`), what durable seq did each row resolve to (`rows[].anchor`), and was it judged shadowed (`shadowed`). Paste it into an issue and the cause is usually obvious at a glance.
+It is the snapshot left by the last sync pass and answers three questions directly: did the tombstones come back from the log (`tombstones`, with `startSeq/endSeq/removed`), what durable seq did each row resolve to (`rows[].anchor`), and was it judged shadowed (`shadowed`). Paste it into an issue and the cause is usually obvious at a glance.
 
 **The authority for what is hidden is the tombstone's own `surfaceOp.startSeq/endSeq`**, not the plugin's custom fields on `source` — a history page is a re-encoded projection of the log, and custom fields are exactly the kind of thing that can move under you. Early builds trusted `source.removed` alone, which produced the very confusing "it worked when I clicked it, but the content came back after a restart" — a bug living only on the reload path. Fixed in v0.1.1, with a regression test that feeds a tombstone whose `source` carries nothing but the plugin identity.
 
