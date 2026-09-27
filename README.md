@@ -1,10 +1,10 @@
+**简体中文** | [English](./README.en.md)
+
 # dsh-message-recall
 
 > **本插件的用途：删掉不喜欢的 AI 回复，或者删掉已经发出去的错误提示词。**
 
 给 [DeepSeek Harness](https://github.com/deepseek-ai/dsh) 会话里的**每一条消息**加上「撤回 / 删除」：鼠标悬停到任意一条消息上，右上角浮出一组小按钮。
-
-[English](./README.en.md) | 中文
 
 ```
 你的提问      [ 撤回 ]  [ 删除 ]  [ 删除此处及之后 ]

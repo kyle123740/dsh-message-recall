@@ -1,10 +1,10 @@
+[简体中文](./README.md) | **English**
+
 # dsh-message-recall
 
 > **What it is for: deleting an AI reply you don't want, or a prompt you already sent by mistake.**
 
 Add **Recall / Delete** to *every single message* in a [DeepSeek Harness](https://github.com/deepseek-ai/dsh) conversation. Hover any message row and a compact action cluster appears at its corner.
-
-English | [中文](./README.md)
 
 ```
 your prompt     [ Recall ]  [ Delete ]  [ Delete onward ]
