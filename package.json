@@ -1,6 +1,6 @@
 {
   "name": "dsh-message-recall",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "每条消息都能撤回 / 删除（含「删除此处及之后」）的 DeepSeek Harness 插件：写 append-only 墓碑，模型上下文与界面同步移除。Per-message recall / delete for DeepSeek Harness sessions.",
   "type": "module",
   "license": "MIT",

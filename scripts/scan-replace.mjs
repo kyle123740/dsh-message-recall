@@ -92,7 +92,9 @@ for (const entry of sessions) {
 		const op = event.surfaceOp;
 		if (op && typeof op === "object" && op.op === "replace") {
 			replaces += 1;
-			if (event.data?.source?.plugin === "message-recall") tombstones += 1;
+			// The tombstone's identity moved from `plugin` to `producer` when the
+			// durable format began refusing `kind: "plugin"` (v0.1.3): accept both.
+			if (event.data?.source?.producer === "message-recall" || event.data?.source?.plugin === "message-recall") tombstones += 1;
 		}
 	}
 	const flag = tombstones > 0 ? "HAS-TOMBSTONES" : replaces > 0 ? `replaces=${replaces}` : "-";

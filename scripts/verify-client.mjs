@@ -586,6 +586,12 @@ console.log("== the guard releases on dispose, so a re-apply works ==");
 // is exactly the regression this pins down.
 for (const dispose of [...disposers].reverse()) dispose();
 check("disposing cleared the guard", globalThis.__DSH_MESSAGE_RECALL_APPLIED__ === false);
+// The clusters and notes are raw DOM, so unmounting must take them with it —
+// otherwise a stale note outlives the plugin unload and reads as "the delete did
+// nothing" while the rows it should have hidden are back.
+const orphanClusters = document.body.querySelectorAll(".dsh-mcr-tools").length;
+const orphanNotes = document.body.querySelectorAll(".dsh-mcr-note").length;
+check("unmounting removes the clusters and notes this plugin added", orphanClusters === 0 && orphanNotes === 0, { orphanClusters, orphanNotes });
 disposers.length = 0;
 api.apply(ctx);
 check("a re-apply registers the seat again", registered.slots.length === seatsBefore + 1, { before: seatsBefore, after: registered.slots.length });
