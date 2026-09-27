@@ -152,6 +152,16 @@ The two most valuable assertions in `verify.mjs`:
 
 One trap when iterating: **the Host reads `lib/client.js` into memory at mount time**, so editing the file alone does not change what the page downloads — disable + enable the plugin (or restart), then reload. A build stamp is logged on load for exactly this reason: `[message-recall] client bundle <BUILD>`.
 
+### Which build is the server actually sending
+
+Arguing about which copy the page runs is easy; here is how to settle it. The Host serves plugin clients through a combo route:
+
+```
+GET /plugins/??dsh-message-recall/client.js&rev=<rev>
+```
+
+`rev` is the first 12 hex chars of `sha1("plugin-artifact" \0 len:mtimeMs len:ctimeMs len:size)` (`artifactRevision` in `dsh-client-modules`) — file metadata only, contents are never hashed. So "I edited the file but the page did not change" has two completely different causes: the Host has not re-read it (rev still old), or the page has not reloaded (rev is new, the browser holds the old one). Compute the rev from the file's `mtimeMs`/`ctimeMs`/`size`, fetch that URL, and read `const BUILD = "…"` out of the response — compare it with the stamp the page logged and you know which side to fix.
+
 ### When something looks wrong
 
 Run this in the page console:

@@ -152,6 +152,16 @@ node scripts/verify-client.mjs   # Client：最小 DOM 桩跑通行装饰、两�
 
 改完客户端代码要注意：**Host 在插件挂载那一刻就把 `lib/client.js` 的字节读进内存**，光改文件不会让页面拿到新版；需要 disable + enable 插件（或重启），再刷新界面。仓库里为此埋了版本戳，加载时会在 Console 打一行 `[message-recall] client bundle <BUILD>`。
 
+### 服务器到底在发哪一版
+
+界面跑的是哪份 bundle 容易争。Host 用 combo 形态 serve 插件客户端：
+
+```
+GET /plugins/??dsh-message-recall/client.js&rev=<rev>
+```
+
+`rev` 是 `sha1("plugin-artifact" \0 len:mtimeMs len:ctimeMs len:size)` 的前 12 位（`dsh-client-modules` 的 `artifactRevision`），只取 `lib/client.js` 的文件元数据，不哈希内容。所以「改了文件但页面没变」有两种完全不同的原因 —— Host 没重读（rev 还是旧的），或页面没重载（rev 是新的但浏览器拿着旧的）。用文件 mtime/ctime/size 自己算出 rev 打这个 URL，返回体里的 `const BUILD = "…"` 就是服务器正在发的版本；和页面 Console 里那行版本戳一比就分清了。
+
 ### 出问题时先看这个
 
 界面 Console 里跑：
