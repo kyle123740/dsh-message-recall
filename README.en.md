@@ -1,5 +1,7 @@
 # dsh-message-recall
 
+> **What it is for: deleting an AI reply you don't want, or a prompt you already sent by mistake.**
+
 Add **Recall / Delete** to *every single message* in a [DeepSeek Harness](https://github.com/deepseek-ai/dsh) conversation. Hover any message row and a compact action cluster appears at its corner.
 
 English | [中文](./README.md)
@@ -181,6 +183,28 @@ npm test                             # all three
 
 `verify-persistence.mjs` is not optional: **it is the only test that can prove "still deleted after a restart".** The 0.1.0–0.1.2 bug passed the other two suites perfectly — everything was correct in memory, it just never reached disk.
 
+### Support scripts (read-only, no DSH needed)
+
+A session log is a container of concatenated zstd frames, so plain gunzip only yields the first frame. That is why the repo carries its own decoder plus a few tools built on it — this is what produced the only hard evidence in the 0.1.3 silent-data-loss hunt:
+
+```bash
+# One session: which ranges a tombstone replaced and what sits inside/after them.
+# --rows loads the REAL client bundle and uses the plugin's own shadowRanges to
+# report which rows the UI should keep and which it should hide.
+node scripts/explain-session.mjs "<session-dir>/session.v4.jsonl.zstd" --rows
+
+# Recent-session overview: title, event count, failed turns, tombstone count —
+# enough to match a screenshot to the log it came from.
+node scripts/list-sessions.mjs "$DSH_HOME/sessions" --hours 6
+
+# Which sessions contain tombstones at all
+node scripts/scan-replace.mjs "$DSH_HOME/sessions" --hours 24
+
+# The decoder itself, and a check that it consumed the file to its last byte
+node scripts/read-session-log.mjs "<session-dir>/session.v4.jsonl.zstd"
+node scripts/verify-decoder.mjs "<session-dir>/session.v4.jsonl.zstd"
+```
+
 ### Read-only diagnostic endpoint
 
 For live troubleshooting, one read action that needs no live Agent and reads the log **on disk**:
@@ -225,10 +249,14 @@ It is the snapshot left by the last sync pass and answers three questions direct
 ### Layout
 
 ```
-lib/main.js            Host: route + tombstone writer
-lib/client.js          Client: hand-written window.__ModuleLoader__ bundle, no build step
-cordis.patch.yml       registers the message-recall row
-scripts/verify*.mjs    offline checks
+lib/main.js                Host: route + tombstone writer + inspect
+lib/client.js              Client: hand-written window.__ModuleLoader__ bundle, no build step
+cordis.patch.yml           registers the message-recall row
+scripts/verify*.mjs        offline checks (Host / persistence / Client)
+scripts/explain-session.mjs one session: tombstone ranges + expected visible rows (--rows)
+scripts/list-sessions.mjs   recent-session overview (title / events / failed turns / tombstones)
+scripts/scan-replace.mjs    find tombstones across every stored session
+scripts/read-session-log.mjs / verify-decoder.mjs   multi-frame zstd log decoder + completeness check
 ```
 
 ## Credits

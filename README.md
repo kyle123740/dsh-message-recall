@@ -1,5 +1,7 @@
 # dsh-message-recall
 
+> **本插件的用途：删掉不喜欢的 AI 回复，或者删掉已经发出去的错误提示词。**
+
 给 [DeepSeek Harness](https://github.com/deepseek-ai/dsh) 会话里的**每一条消息**加上「撤回 / 删除」：鼠标悬停到任意一条消息上，右上角浮出一组小按钮。
 
 [English](./README.en.md) | 中文
@@ -186,6 +188,26 @@ npm test                             # 三套一起跑
 
 `verify-persistence.mjs` 之所以必须有：**它才是唯一能证明「重启后仍然删除」的测试。** 0.1.0–0.1.2 的 bug 完全躲过了前两套 —— 内存里一切正确，只是没落盘。
 
+### 排查脚本（只读，不启动 DSH 也能跑）
+
+会话日志是「多个 zstd 帧拼接」的容器，直接 gunzip 只能拿到第一帧，所以仓库自带解码器与几个基于它的排查工具 —— 这套东西是 0.1.3 那个静默丢删除的 bug 里唯一能给出答案的手段：
+
+```bash
+# 一条会话里：墓碑覆盖了哪段、段内/段后各有什么；--rows 还会加载真实 client bundle
+# 用插件自己的 shadowRanges 算出「界面现在应该保留哪些行、隐藏哪些行」
+node scripts/explain-session.mjs "<会话目录>/session.v4.jsonl.zstd" --rows
+
+# 最近会话总览：标题、事件数、失败轮次数、墓碑数 —— 用来把截图和日志对上号
+node scripts/list-sessions.mjs "$DSH_HOME/sessions" --hours 6
+
+# 扫所有会话，标出哪些含墓碑
+node scripts/scan-replace.mjs "$DSH_HOME/sessions" --hours 24
+
+# 底层：把容器按帧解开并打印事件；verify-decoder.mjs 用来证明解码器读到了文件末尾
+node scripts/read-session-log.mjs "<会话目录>/session.v4.jsonl.zstd"
+node scripts/verify-decoder.mjs "<会话目录>/session.v4.jsonl.zstd"
+```
+
 ### 只读诊断接口
 
 排查线上问题时可以用一个读动作，它不需要活着的 Agent，也会读**磁盘**上的日志：
@@ -225,10 +247,14 @@ JSON.stringify(window.__MCR_DEBUG__, null, 1)
 ### 目录
 
 ```
-lib/main.js            Host：路由 + 墓碑写入
-lib/client.js          Client：手写 window.__ModuleLoader__ bundle，无需构建
-cordis.patch.yml       注册 message-recall 行
-scripts/verify*.mjs    离线自检
+lib/main.js                Host：路由 + 墓碑写入 + inspect
+lib/client.js              Client：手写 window.__ModuleLoader__ bundle，无需构建
+cordis.patch.yml           注册 message-recall 行
+scripts/verify*.mjs        离线自检（Host / 持久化 / Client）
+scripts/explain-session.mjs 单会话判定：墓碑区间 + 期望可见行（--rows）
+scripts/list-sessions.mjs   最近会话总览（标题 / 事件数 / 失败轮次 / 墓碑数）
+scripts/scan-replace.mjs    扫描所有会话里的墓碑
+scripts/read-session-log.mjs / verify-decoder.mjs   多帧 zstd 日志解码器与完整性自检
 ```
 
 ## 致谢
