@@ -502,6 +502,30 @@ eventWindow.entries = [];
 mount();
 check("clearing the tombstone brings the rows back", promptRow.hidden === false && retryRow.hidden === false && promptRow.dataset.mcrHidden === undefined);
 
+console.log("== the reload path: a history page that drops custom source fields ==");
+// A history page is a re-encoded projection of the log. If it ever strips the
+// plugin's custom `source` fields, hiding must still work — `surfaceOp` is a
+// protocol field and carries the same range. This is the regression the user hit:
+// note present, rows back, only after a restart.
+const trimmedTombstone = {
+	type: "event",
+	event: {
+		seq: 94,
+		type: "user/message",
+		surfaceOp: { op: "replace", startSeq: 90, endSeq: 92 },
+		data: { content: [], source: { kind: "plugin", plugin: "message-recall" } },
+	},
+};
+eventWindow.entries = [trimmedTombstone];
+mount();
+check("hiding survives without source.removed", promptRow.hidden === true && retryRow.hidden === true);
+check("the single-removal range stops at endSeq", afterRow.hidden === false);
+const parsedTrimmed = api.tombstonesOf({ entries: [trimmedTombstone] });
+check("surfaceOp endpoints are read off the event", parsedTrimmed[0]?.startSeq === 90 && parsedTrimmed[0]?.endSeq === 92, parsedTrimmed);
+check("an unknown action still degrades to a note", parsedTrimmed[0]?.action === "delete" && parsedTrimmed[0]?.removed.length === 0, parsedTrimmed[0]);
+eventWindow.entries = [];
+mount();
+
 console.log("== a single removal hides only its own span ==");
 const shadow = api.shadowRanges([
 	{ seq: 200, action: "delete", removed: [10, 11], turn: 3 },

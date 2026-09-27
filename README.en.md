@@ -152,6 +152,18 @@ The two most valuable assertions in `verify.mjs`:
 
 One trap when iterating: **the Host reads `lib/client.js` into memory at mount time**, so editing the file alone does not change what the page downloads — disable + enable the plugin (or restart), then reload. A build stamp is logged on load for exactly this reason: `[message-recall] client bundle <BUILD>`.
 
+### When something looks wrong
+
+Run this in the page console:
+
+```js
+JSON.stringify(window.__MCR_DEBUG__, null, 1)
+```
+
+It is the snapshot left by the last sync pass and answers three questions directly: did the tombstones come back from the log (`notes`, with `startSeq/endSeq/removed`), what durable seq did each row resolve to (`rows[].anchor`), and was it judged shadowed (`shadowed`). Paste it into an issue and the cause is usually obvious at a glance.
+
+**The authority for what is hidden is the tombstone's own `surfaceOp.startSeq/endSeq`**, not the plugin's custom fields on `source` — a history page is a re-encoded projection of the log, and custom fields are exactly the kind of thing that can move under you. Early builds trusted `source.removed` alone, which produced the very confusing "it worked when I clicked it, but the content came back after a restart" — a bug living only on the reload path. Fixed in v0.1.1, with a regression test that feeds a tombstone whose `source` carries nothing but the plugin identity.
+
 ### Layout
 
 ```

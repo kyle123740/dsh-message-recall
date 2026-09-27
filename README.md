@@ -152,6 +152,18 @@ node scripts/verify-client.mjs   # Client：最小 DOM 桩跑通行装饰、两�
 
 改完客户端代码要注意：**Host 在插件挂载那一刻就把 `lib/client.js` 的字节读进内存**，光改文件不会让页面拿到新版；需要 disable + enable 插件（或重启），再刷新界面。仓库里为此埋了版本戳，加载时会在 Console 打一行 `[message-recall] client bundle <BUILD>`。
 
+### 出问题时先看这个
+
+界面 Console 里跑：
+
+```js
+JSON.stringify(window.__MCR_DEBUG__, null, 1)
+```
+
+这是每次同步后留下的快照，直接回答三个问题：墓碑事件有没有从日志读回来（`notes`，含 `startSeq/endSeq/removed`）、每行解析到的持久 seq 是多少（`rows[].anchor`）、它有没有被判成遮蔽（`shadowed`）。提 issue 时把这段贴上来，基本一眼定位。
+
+**遮蔽的权威来源是墓碑事件自己的 `surfaceOp.startSeq/endSeq`**，不是插件写在 `source` 上的自定义字段 —— 历史分页是日志的再编码投影，自定义字段属于「可能被动到」的那一类。早期版本只信 `source.removed`，于是出现了「点完当场生效、重启后内容又回来」这种**只在重载路径上发作**的现象（v0.1.1 修掉，并加了回归用例）。
+
 ### 目录
 
 ```
