@@ -6,7 +6,11 @@
  * tombstone replaced — so "inside the deleted range" (the plugin should hide it)
  * is separated from "after the tombstone" (legitimately still visible).
  *
- * Usage: node scripts/explain-session.mjs <log-path> [--tail 40]
+ * With --rows it also reports which rows the CLIENT half would keep, by loading
+ * the real `lib/client.js` bundle under a stub loader and calling its own
+ * `shadowRanges` — the same predicate the page runs, not a re-implementation.
+ *
+ * Usage: node scripts/explain-session.mjs <log-path> [--tail 40] [--rows]
  */
 import { readFileSync } from "node:fs";
 import zlib from "node:zlib";
@@ -92,4 +96,39 @@ console.log(`\n--- last ${tail} events ---`);
 for (const event of events.slice(-tail)) {
 	const surface = fold.nodes.includes(event.seq) ? "ON-SURFACE" : "";
 	console.log(`  ${String(event.seq).padStart(5)} ${event.type.padEnd(22)} ${surface}${event.data?.turn === undefined ? "" : ` turn=${event.data.turn}`}`);
+}
+
+if (process.argv.includes("--rows")) {
+	// Load the real client bundle under a stub loader so the verdict comes from the
+	// shipped predicate rather than a second implementation of it.
+	const win = { __ModuleLoader__: { load: (entry) => { win.__entry = entry; } } };
+	globalThis.window = win;
+	const reactStub = { createElement: () => null, useState: (v) => [v, () => {}], useEffect: () => {}, useCallback: (f) => f, Fragment: "f" };
+	reactStub.default = reactStub;
+	globalThis.document = undefined;
+	new Function("require", readFileSync(new URL("../lib/client.js", import.meta.url), "utf8"))((name) => reactStub);
+	const api = win.__entry.factory(() => reactStub);
+	const shadowed = api.shadowRanges(api.tombstonesOf({ entries: events.map((event) => ({ type: "event", event })) }));
+
+	// Which events project a transcript row, by the kind each event type maps to.
+	const ROW_KINDS = {
+		"user/message": "user",
+		"assistant/message": "assistant-step",
+		"tool/result": "tool-call",
+		"turn/end": "turn-tail-or-error",
+		"model/selection": null,
+		"llm/retry": "model-retry",
+	};
+	console.log("\n--- what the CLIENT half would keep visible ---");
+	const kept = [];
+	const hidden = [];
+	for (const event of events) {
+		const kind = ROW_KINDS[event.type];
+		if (kind === undefined || kind === null) continue;
+		// Rows anchor at their own seq; a turn tail anchors just above its closing seq.
+		const anchor = event.type === "turn/end" ? event.seq + 0.1 : event.seq;
+		(shadowed(anchor) ? hidden : kept).push(`${event.seq}:${kind}`);
+	}
+	console.log(`  kept (${kept.length}): ${kept.join(" ")}`);
+	console.log(`  hidden (${hidden.length}): ${hidden.join(" ")}`);
 }

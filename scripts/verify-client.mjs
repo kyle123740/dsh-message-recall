@@ -587,6 +587,12 @@ api.apply(ctx);
 check("a re-apply registers the seat again", registered.slots.length === seatsBefore + 1, { before: seatsBefore, after: registered.slots.length });
 check("the guard is set again", globalThis.__DSH_MESSAGE_RECALL_APPLIED__ === true);
 
+console.log("== the declaration that the hiding depends on ==");
+// v0.1.4 dropped "sessions" from the inject list and read it optimistically; an
+// undeclared service is not reachable through the context, so the event window
+// came back undefined and the hiding stopped — while the buttons kept working.
+check("`sessions` is declared in inject", api.inject.includes("sessions"), api.inject);
+
 console.log("== the client half survives a missing session face ==");
 // Row decoration must not depend on the sessions lookup: a plugin with no buttons
 // because one optional service was late is a plugin that looks broken.
