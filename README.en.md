@@ -67,7 +67,7 @@ dsh plugin --profile web add github:kyle123740/dsh-message-recall
 Pin a version for a reproducible install:
 
 ```bash
-dsh plugin --profile desktop add github:kyle123740/dsh-message-recall#v0.1.6
+dsh plugin --profile desktop add github:kyle123740/dsh-message-recall#v0.1.7
 ```
 
 Then **restart that profile once** (the Host half needs a fresh import) and reload the UI (the Client half is fetched by the page). Toggles live under *Settings → Plugins*, or:
