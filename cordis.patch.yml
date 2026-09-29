@@ -1,6 +1,8 @@
 # dsh-message-recall bundle patch: registers the plugin row.
 # Applied as a profile layer after dsh-base and dsh-web-app.
+# `name` is the package name the loader resolves from node_modules — it must
+# match package.json's `name` (@kyle123740/dsh-message-recall since v0.2.0).
 
 - insert:
     - id: message-recall
-      name: 'dsh-message-recall'
+      name: '@kyle123740/dsh-message-recall'

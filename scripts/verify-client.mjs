@@ -280,7 +280,7 @@ new Function("require", source)((name) => {
 	throw new Error(`unexpected require "${name}"`);
 });
 
-check("bundle registers with __ModuleLoader__", loaded !== null && loaded.id === "dsh-message-recall");
+check("bundle registers with __ModuleLoader__ under the scoped package name", loaded !== null && loaded.id === "@kyle123740/dsh-message-recall");
 const api = loaded.factory(() => reactStub);
 check("client exports apply + inject", typeof api.apply === "function" && Array.isArray(api.inject), Object.keys(api));
 
