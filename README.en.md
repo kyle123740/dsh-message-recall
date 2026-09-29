@@ -101,7 +101,7 @@ node scripts/scan-replace.mjs <sessions-root> # find which sessions contain tomb
 ## How it works
 
 1. Resolve the message's position in the current **surface** (the model-visible context).
-2. Append one **empty `user/message` tombstone** carrying `surfaceOp: { op: 'replace', startSeq, endSeq }` plus `sourceEventSeqs: [shadowed seqs]`.
+2. Append one `user/message` tombstone whose content is a **non-empty placeholder** (`content: [{ type: "text", text: "[已撤回]" }]` — see below for why it must not be empty), carrying `surfaceOp: { op: 'replace', startSeq, endSeq }` plus `sourceEventSeqs: [shadowed seqs]`.
 3. The surface is the single source of derived model history (`Session.deriveMessages`), so the shadowed content **is not sent on the next request**.
 4. The original events stay in the log. Reopening the session replays `foldSurface(events)` and lands on exactly the same surface — deleted content does not come back to life.
 
@@ -122,13 +122,22 @@ if (typeof value["kind"] !== "string" || value["kind"].length === 0 || value["ki
 2. at flush time the persistence encoder threw for the **whole batch** → nothing was written;
 3. after a restart the log was rebuilt from disk → the deletion was **gone**, and the deleted content was back in the transcript **and in the model context**.
 
-That is the "works when I click it, comes back after a restart" symptom. Since v0.1.3 the tombstone declares `kind: "user"` (it is a user-role message with no content, and `user/message` is **not** required to sit inside an open turn/step in v4, so appending it after `turn/end` is legal) while the plugin's identity rides on `producer: "message-recall"`. The client accepts both shapes, so a stale tombstone already in a page keeps working.
+That is the "works when I click it, comes back after a restart" symptom. Since v0.1.3 the tombstone declares `kind: "user"` (it is a user-role message, and `user/message` is **not** required to sit inside an open turn/step in v4, so appending it after `turn/end` is legal) while the plugin's identity rides on `producer: "message-recall"`. The client accepts both shapes, so a stale tombstone already in a page keeps working.
 
 Pinned by [scripts/verify-persistence.mjs](scripts/verify-persistence.mjs): it writes the tombstone through the **real** `@deepseek-ai/dsh-session-persistence-jsonl` backend into a temp root, flushes, reads it back from disk, and asserts that every event round-trips, the tombstone is on disk, the replace semantics survive, the replayed surface equals the live one, and a reopened Session no longer derives the deleted text — plus a negative check that `kind: "plugin"` is refused.
 
 Two details worth knowing, both learned the hard way:
 
-**An empty `user/message` never reaches the provider.** The encoder in `dsh-llm-deepseek` has `if (message.role === "user" && content.length === 0) continue;`, so the tombstone costs no context and leaves no “(this message was deleted)” noise in front of the model.
+**A tombstone's content must be non-empty, or strict upstreams reject the whole request with a 400.** Earlier versions wrote `content: []`, on the strength of `if (message.role === "user" && content.length === 0) continue;` in the `dsh-llm-deepseek` encoder. That is **one adapter's** behaviour, though: the multi-provider `dsh-llm-pi-ai` does not skip — its `textOnlyContext` sends every non-system/assistant/tool message verbatim as `{ role: "user", content: flattenText(message) }`, so an empty block array becomes `content: ""` on the wire. Strict OpenAI-compatible gateways then reject the **entire request**: measured against SenseAudio (`api.senseaudio.cn`, model `deepseek-v4.1-flash`):
+
+```json
+{"is_bifrost_error":false,"status_code":400,"error":{"type":"invalid_request_error","code":"invalid_request_error",
+ "message":"messages: Validation error: message content cannot be empty [...]"}}
+```
+
+(`content: []` yields `message content parts cannot be empty` instead; `content: " "` / `"\n"` / any text returns 200, and empty content on assistant or tool messages is let through.) DeepSeek's own route and TokenRhythm happen to tolerate empty content, which is why the trap only fires on other routes — it looks like "the same session 400s on a SenseAudio model and works again when I switch back". The tombstone therefore now writes `content: [{ type: "text", text: "[已撤回]" }]`: non-empty, negligible context, still invisible in the UI (a surface-replacement node is not an append-surface event), and hiding is still keyed only on `source.producer` plus the replace range, never on this text. Pinned by `no user message projects empty content` in [scripts/verify.mjs](scripts/verify.mjs).
+
+> Note: this fixes **newly written** tombstones only. Empty tombstones (`content: []`) already on disk still make their sessions fail on strict upstreams — keep those sessions on a route that tolerates empty content, or do the recall/delete work in a fresh session.
 
 **The surface is not the transcript.** `dsh-session` says so out loud: the surface deliberately shadows replaced ranges, because it is the *model* view; a human transcript needs append-origin events, otherwise one replacement would silently erase rows the user already read. So removing something from the model context does **not** remove the row. The hiding is derived client-side from the tombstone's own `source.removed`:
 
@@ -157,6 +166,8 @@ Content-Type: application/json
 
 { "sessionId": "session-…", "action": "recall" | "delete" | "deleteFrom",
   "seq": 42 }            // or "messageId": "…"
+
+{ "sessionId": "session-…", "action": "migrate" }   # repair legacy empty tombstones; no target
 ```
 
 Every reply is `{ ok: true, value }` or `{ ok: false, error: { code, message } }`.
@@ -215,7 +226,39 @@ curl -s -X POST http://127.0.0.1:19387/dsh-message-recall \
   -d '{"sessionId":"session-…","action":"inspect"}'
 ```
 
-It returns `{ live, disk }` summaries: event count, `maxSeq`, every replace event (with `plugin`/`op`/`sourceEventSeqs`), and the per-seq type stream. Comparing "in memory" against "on disk" is what isolated this bug.
+It returns `{ live, disk }` summaries: event count, `maxSeq`, every replace event (with `plugin`/`op`/`sourceEventSeqs`), and the per-seq type stream. Comparing "in memory" against "on disk" is what isolated this bug. Each tombstone also carries `legacy: true/false`, so you can see at a glance how many still have the old empty content.
+
+### Repairing legacy empty tombstones (`migrate`)
+
+Older builds wrote tombstones as `content: []`. Those **already on disk** still make strict upstreams reject the whole request with a 400 (see the end of “How it works”), and fixing new tombstones alone does not rescue an old Session. A repair needs the Session **open in the UI** (otherwise `SESSION_NOT_LIVE`):
+
+```bash
+curl -s -X POST http://127.0.0.1:19387/dsh-message-recall \
+  -H 'content-type: application/json' \
+  -d '{"sessionId":"session-…","action":"migrate"}'
+# → {"ok":true,"value":{"action":"migrate","migrated":3}}
+```
+
+Or type nothing at all: **recall or delete anything in that Session** — every operation heals the legacy tombstones on the way past, and reports `migrated: N` in its reply.
+
+The repair appends a fresh tombstone whose replace span is the legacy node itself: the empty node leaves the surface, the new node carries the same placeholder plus the **legacy `removed` list verbatim**, so the Client derives exactly the same hiding as before, and the log is still append-only. Idempotent — a second run answers `migrated: 0`. Covered by the `legacy repair` section of `scripts/verify.mjs`.
+
+### The last-line guard (on by default)
+
+`migrate` fixes the **log**, but it needs the Session open first. So the plugin also listens on the `agent/pre-step` waterfall: before a request leaves, the final message list is scanned and **any user message with blank content** (`[]`, `""`, or only empty text blocks) is given the placeholder in flight. As a result
+
+- Sessions that were never migrated no longer 400 either;
+- blank messages from any other producer are covered too;
+- only the `user` role is touched — gateways already accept blank assistant/tool content, and rewriting an assistant message would break the pi-ai replay state, which validates its block count.
+
+When it fires, the Host logs a warning that also points at the un-migrated tombstones. The guard is a **runtime safety net that writes nothing**; `migrate` is the **durable cleanup** — rely on the guard day to day and run `migrate` on a Session once you see the warning. Turn it off with:
+
+```yaml
+- id: message-recall
+  name: dsh-message-recall
+  config:
+    emptyContentGuard: false
+```
 
 The two most valuable assertions in `verify.mjs`:
 

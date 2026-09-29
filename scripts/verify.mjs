@@ -1,7 +1,7 @@
 import { Readable } from "node:stream";
 import { Session, SessionId, foldSurface } from "@deepseek-ai/dsh-session";
 import { createAssistantMessage, createSystemMessage, createToolResultMessage, createUserMessage } from "@deepseek-ai/dsh-llm";
-import { apply, applyRecall, handleRecallRequest } from "../lib/main.js";
+import { apply, applyRecall, guardBlankUserMessages, handleRecallRequest, isBlankContent, isLegacyTombstone, migrateLegacyTombstones, PLACEHOLDER_TEXT } from "../lib/main.js";
 
 /** Minimal assertion helper: collect failures, print a summary, exit non-zero. */
 const failures = [];
@@ -177,9 +177,22 @@ for (const candidate of [session, step.session, up.session, single.session, tail
 	}
 }
 
-console.log("== provider encoding: the empty tombstone must not reach the model ==");
-const wire = session.deriveMessages().filter((message) => message.role === "user" && message.content.length === 0);
-check("tombstones project to empty user messages (adapter skips them)", wire.length === 2, wire.length);
+console.log("== provider encoding: no tombstone may reach the model as empty content ==");
+// A tombstone used to be `content: []`, on the assumption that the provider
+// adapter skips empty user messages. The pi-ai adapter does NOT: it forwards
+// every non-system/assistant/tool message verbatim (`textOnlyContext` in
+// @deepseek-ai/dsh-llm-pi-ai), so the tombstone reaches the wire as
+// `content: ""`. Strict OpenAI-compatible gateways then reject the whole
+// request — SenseAudio answers HTTP 400 `messages: Validation error: message
+// content cannot be empty` (and `message content parts cannot be empty` for
+// `[]`). DeepSeek/TokenRhythm tolerate it, which is why the empty shape only
+// surfaced on other routes. The tombstone must therefore carry a non-empty
+// placeholder; hiding is keyed on `source.producer` + the replace range, not
+// on this text.
+const emptyWire = session.deriveMessages().filter((message) => message.role === "user" && message.content.length === 0);
+check("no user message projects empty content", emptyWire.length === 0, emptyWire.length);
+const tombstoneWire = session.deriveMessages().filter((message) => message.role === "user" && message.content.some((block) => block.type === "text" && block.text.length > 0));
+check("tombstones project a non-empty placeholder", tombstoneWire.length >= 2, tombstoneWire.length);
 
 console.log("== mount: apply() keeps the HTTP route registered ==");
 // Mirrors cordis `Scope.effect(execute)`: the argument is the SETUP function and
@@ -211,6 +224,88 @@ check("route registered on mount", routes.has("/dsh-message-recall"), [...routes
 check("route survived the effect wiring (not disposed at boot)", disposed === 0, disposed);
 for (const release of disposers) release();
 check("teardown releases the route", disposed === 1 && !routes.has("/dsh-message-recall"), disposed);
+
+console.log("== legacy repair: an empty tombstone must not survive on the surface ==");
+
+/** The same Session plus one tombstone written in the old `content: []` shape. */
+function buildLegacyWorld() {
+	const world = buildSession();
+	const victim = world.session.append("user/message", createUserMessage({
+		content: [{ type: "text", text: "旧版删掉的提问" }],
+		source: { kind: "user" },
+	}), { surfaceOp: "append" });
+	const legacyTomb = world.session.append("user/message", createUserMessage({
+		content: [],
+		source: { kind: "user", producer: "message-recall", action: "delete", removed: [victim.seq], kinds: ["user"], turn: 2, preview: "旧版删掉的提问", truncated: false },
+	}), { surfaceOp: { op: "replace", startSeq: victim.seq, endSeq: victim.seq }, sourceEventSeqs: [victim.seq] });
+	return { ...world, victim, legacyTomb };
+}
+
+{
+	const w = buildLegacyWorld();
+	check("the legacy tombstone sits on the surface", [...w.session.surface.nodes].includes(w.legacyTomb.seq), [...w.session.surface.nodes]);
+	check("the legacy shape really projects an empty user message", w.session.deriveMessages().some((message) => message.role === "user" && message.content.length === 0));
+	check("isLegacyTombstone flags it", isLegacyTombstone(w.session.snapshotEvents().find((event) => event.seq === w.legacyTomb.seq)));
+	const count = migrateLegacyTombstones(w.session);
+	check("migrate repairs exactly the legacy tombstone", count === 1, count);
+	check("no empty user message survives the repair", w.session.deriveMessages().every((message) => message.content.length > 0));
+	const repair = w.session.snapshotEvents().at(-1);
+	check("the repair shadows the legacy node", repair.surfaceOp?.startSeq === w.legacyTomb.seq && repair.data.source.migratedFrom === w.legacyTomb.seq, repair.surfaceOp);
+	check("the repair keeps the legacy removed list", JSON.stringify(repair.data.source.removed) === JSON.stringify([w.victim.seq]), repair.data.source);
+	check("the deleted text stays out of the model history", !prose(w.session.deriveMessages()).includes("旧版删掉的提问"));
+	check("migrate is idempotent", migrateLegacyTombstones(w.session) === 0);
+	const reopened = Session.create(SessionId("session-legacy-replay"), w.session.snapshotEvents());
+	check("replay lands on the same surface", JSON.stringify([...reopened.surface.nodes]) === JSON.stringify([...w.session.surface.nodes]), [...reopened.surface.nodes]);
+	check("replayed history carries no empty user message", reopened.deriveMessages().every((message) => message.content.length > 0));
+}
+
+console.log("== pre-step guard: a blank user message must never leave the process ==");
+check("isBlankContent: []", isBlankContent([]));
+check("isBlankContent: ''", isBlankContent(""));
+check("isBlankContent: [text '']", isBlankContent([{ type: "text", text: "" }]));
+check("real text is not blank", !isBlankContent([{ type: "text", text: "你好" }]));
+check("whitespace counts as content", !isBlankContent([{ type: "text", text: " " }]));
+check("an image block counts as content", !isBlankContent([{ type: "image", attachment: {} }]));
+{
+	const input = [
+		{ role: "system", content: [{ type: "text", text: "sys" }] },
+		{ role: "user", content: [] },
+		{ role: "assistant", content: [] },
+		{ role: "tool", content: [] },
+		{ role: "user", content: [{ type: "text", text: "hi" }] },
+	];
+	const guarded = guardBlankUserMessages(input);
+	check("guard patches exactly the blank user message", guarded.count === 1, guarded.count);
+	check("the patched message carries the placeholder", guarded.messages[1].content[0].text === PLACEHOLDER_TEXT, guarded.messages[1]);
+	check("assistant and tool messages are left alone", guarded.messages[2].content.length === 0 && guarded.messages[3].content.length === 0);
+	check("untouched messages pass through by reference", guarded.messages[0] === input[0] && guarded.messages[4] === input[4]);
+}
+{
+	const listeners = [];
+	const guardCtx = {
+		get: () => undefined,
+		effect: () => { },
+		on: (event, listener, options) => { listeners.push({ event, listener, options }); },
+		logger: { warn: () => { } },
+	};
+	apply(guardCtx);
+	check("registers the pre-step guard", listeners.some((entry) => entry.event === "agent/pre-step"), listeners.map((entry) => entry.event));
+	const entry = listeners.find((x) => x.event === "agent/pre-step");
+	check("runs after the default decision (waterfall)", entry.options?.prepend === false, entry.options);
+	const blank = { kind: "proceed", messages: [{ role: "user", content: [] }] };
+	const patched = await entry.listener({ signal: new AbortController().signal, messages: blank.messages }, async () => blank);
+	check("the listener patches the blank message", patched.messages[0].content[0].text === PLACEHOLDER_TEXT, patched);
+	const clean = { kind: "proceed", messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }] };
+	check("a clean decision comes back identical", await entry.listener({ signal: new AbortController().signal, messages: clean.messages }, async () => clean) === clean);
+	const rejected = { kind: "reject", reason: "busy" };
+	check("a rejected decision is not rewritten", await entry.listener({ signal: new AbortController().signal, messages: [] }, async () => rejected) === rejected);
+	const aborted = new AbortController();
+	aborted.abort();
+	const stale = { kind: "proceed", messages: [{ role: "user", content: [] }] };
+	check("an aborted step is left alone", await entry.listener({ signal: aborted.signal, messages: stale.messages }, async () => stale) === stale);
+	apply({ get: () => undefined, effect: () => { }, on: () => { throw new Error("guard must not register when disabled"); } }, { emptyContentGuard: false });
+	check("config emptyContentGuard:false disables the guard", true);
+}
 
 console.log("== HTTP end to end (mock req/res against a live Session) ==");
 
@@ -261,6 +356,35 @@ const busyResponse = mockResponse();
 await handleRecallRequest(httpCtx, mockRequest({ sessionId: "session-verify", action: "recall", seq: live.first.seq }), busyResponse);
 check("a second recall answers 409", busyResponse.status === 409, busyResponse.status);
 check("the error code round-trips for the Client", JSON.parse(busyResponse.body).error.code === "TARGET_NOT_FOUND", busyResponse.body);
+
+// A Session holding a legacy empty tombstone must answer strict providers again,
+// both on request (`migrate`) and as a side effect of any normal operation.
+function legacyCtxOf(world) {
+	const agent = { session: world.session, runMaintenance: async (task) => await task(new AbortController().signal) };
+	return {
+		get: (name) => {
+			if (name === "agents") return { get: () => agent };
+			if (name === "sessions") return { get: (id) => (id === world.session.id ? world.session : undefined), flush: async () => { } };
+			return undefined;
+		},
+	};
+}
+
+const migrateWorld = buildLegacyWorld();
+const migrateResponse = mockResponse();
+await handleRecallRequest(legacyCtxOf(migrateWorld), mockRequest({ sessionId: "session-verify", action: "migrate" }), migrateResponse);
+check("HTTP 200 on migrate, which needs no target", migrateResponse.status === 200, migrateResponse.body);
+check("migrate reports what it repaired", JSON.parse(migrateResponse.body).value.migrated === 1, migrateResponse.body);
+check("the migrated Session is clean for strict providers", migrateWorld.session.deriveMessages().every((message) => message.content.length > 0));
+const remigrateResponse = mockResponse();
+await handleRecallRequest(legacyCtxOf(migrateWorld), mockRequest({ sessionId: "session-verify", action: "migrate" }), remigrateResponse);
+check("a second migrate repairs nothing", JSON.parse(remigrateResponse.body).value.migrated === 0, remigrateResponse.body);
+
+const healWorld = buildLegacyWorld();
+const healResponse = mockResponse();
+await handleRecallRequest(legacyCtxOf(healWorld), mockRequest({ sessionId: "session-verify", action: "delete", seq: healWorld.second.seq }), healResponse);
+check("an ordinary delete also heals legacy tombstones", JSON.parse(healResponse.body).value.migrated === 1, healResponse.body);
+check("and leaves no empty user message behind", healWorld.session.deriveMessages().every((message) => message.content.length > 0));
 
 const wrongMethod = mockResponse();
 await handleRecallRequest(httpCtx, mockRequest({}, "GET"), wrongMethod);

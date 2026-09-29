@@ -101,7 +101,7 @@ node scripts/scan-replace.mjs <会话根目录>    # 扫描所有会话，找出
 ## 工作原理
 
 1. 定位这条消息在当前 **surface**（模型可见上下文）里的位置；
-2. 追加一条**空的 `user/message` 墓碑事件**，带 `surfaceOp: { op: 'replace', startSeq, endSeq }` 与 `sourceEventSeqs: [被遮蔽的 seq]`；
+2. 追加一条 `user/message` 墓碑事件，内容是一条**非空占位文本**（`content: [{ type: "text", text: "[已撤回]" }]`，见下文为什么不能是空的），带 `surfaceOp: { op: 'replace', startSeq, endSeq }` 与 `sourceEventSeqs: [被遮蔽的 seq]`；
 3. surface 是派生模型历史的唯一来源（`Session.deriveMessages`），所以被遮蔽的内容**下一次请求就不会再发给模型**；
 4. 原始事件仍留在日志里；重新打开会话时靠重放 `foldSurface(events)` 得到完全一致的 surface —— 删掉的东西不会「复活」。
 
@@ -122,13 +122,22 @@ if (typeof value["kind"] !== "string" || value["kind"].length === 0 || value["ki
 2. flush 时持久化编码器对**整批**抛错 → 一条都没写进磁盘；
 3. 重启后从磁盘重建 → 删除**消失**，被删内容回到界面**和模型上下文**。
 
-现象就是「点完当场生效、重启后内容又回来」。v0.1.3 起墓碑声明 `kind: "user"`（它本来就是 user 角色的空消息；`user/message` 在 v4 里**不要求处于开启的 turn/step 内**，所以追加在 `turn/end` 之后合法），插件身份改放 `producer: "message-recall"`。客户端两种形状都认，页面上残留的旧墓碑不会突然失效。
+现象就是「点完当场生效、重启后内容又回来」。v0.1.3 起墓碑声明 `kind: "user"`（它本来就是 user 角色的消息；`user/message` 在 v4 里**不要求处于开启的 turn/step 内**，所以追加在 `turn/end` 之后合法），插件身份改放 `producer: "message-recall"`。客户端两种形状都认，页面上残留的旧墓碑不会突然失效。
 
 回归用 [scripts/verify-persistence.mjs](scripts/verify-persistence.mjs) 钉住：它把墓碑写进**真实** `@deepseek-ai/dsh-session-persistence-jsonl` 后端的临时目录、flush、再从磁盘读回，断言「事件全数往返 / 墓碑在盘上 / replace 语义保留 / 重放 surface 与实时一致 / 重开会话不再派生被删文本」，最后一条负向断言专门验证 `kind: "plugin"` 会被格式拒绝。
 
 两个关键细节，都是这个插件踩过之后才写明白的：
 
-**空内容的 `user/message` 不会进入请求。** `dsh-llm-deepseek` 编码层有 `if (message.role === "user" && content.length === 0) continue;`，所以墓碑本身不占上下文，也不会给模型留下「（此消息已删除）」这类噪音。
+**墓碑的内容必须非空，否则严格的上游会把整条请求打回 400。** 早期版本写 `content: []`，依据是 `dsh-llm-deepseek` 编码层里的 `if (message.role === "user" && content.length === 0) continue;`。但那是**那一个适配器**的行为：多 provider 的 `dsh-llm-pi-ai` 恰恰不跳过——它的 `textOnlyContext` 把每条非 system/assistant/tool 的消息原样下发成 `{ role: "user", content: flattenText(message) }`，空块数组于是变成线上的 `content: ""`。严格校验的 OpenAI 兼容网关会因此拒绝**整个请求**：实测 SenseAudio（`api.senseaudio.cn`，模型 `deepseek-v4.1-flash`）返回
+
+```json
+{"is_bifrost_error":false,"status_code":400,"error":{"type":"invalid_request_error","code":"invalid_request_error",
+ "message":"messages: Validation error: message content cannot be empty [...]"}}
+```
+
+（`content: []` 得到的是 `message content parts cannot be empty`；`content: " "` / `"\n"` / 任意文字则 200，assistant 与 tool 消息的空内容也放行。）DeepSeek 官方与 TokenRhythm 恰好容忍空内容，所以这个坑只在别的路线上炸——表现就是「同一个会话，换到 SenseAudio 的模型就 400，换回去又正常」。因此墓碑现在写 `content: [{ type: "text", text: "[已撤回]" }]`：占位文本非空、几乎不占上下文，界面照旧不显示它（surface 替换节点不是 append-surface 事件），隐藏逻辑仍然只认 `source.producer` 与 replace 区间，不受内容影响。回归由 [scripts/verify.mjs](scripts/verify.mjs) 的 `no user message projects empty content` 钉住。
+
+> 注意：这条只修**新写入**的墓碑。磁盘上已经存在的旧空墓碑（`content: []`）仍会让含它们的会话在严格上游上 400，需要在新会话里操作，或把老会话继续留给容忍空内容的路线。
 
 **surface 不是转录本。** `dsh-session` 的注释写得很清楚：surface 刻意遮蔽被替换的区间，那是**模型视图**；人类转录本要的是 append-origin 事件，否则一次替换就把用户已经读过的对话凭空抹掉。所以「从模型上下文里删掉」**不会**自动让界面行消失。行的隐藏由客户端从墓碑的 `source.removed` 推导：
 
@@ -157,6 +166,8 @@ Content-Type: application/json
 
 { "sessionId": "session-…", "action": "recall" | "delete" | "deleteFrom",
   "seq": 42 }            // 或 "messageId": "…"
+
+{ "sessionId": "session-…", "action": "migrate" }   // 修复旧版空墓碑，不需要目标
 ```
 
 响应统一是 `{ ok: true, value }` / `{ ok: false, error: { code, message } }`。
@@ -218,7 +229,39 @@ curl -s -X POST http://127.0.0.1:19387/dsh-message-recall \
   -d '{"sessionId":"session-…","action":"inspect"}'
 ```
 
-返回 `{ live, disk }` 两份摘要：事件数、`maxSeq`、**所有 replace 事件**（含 `plugin`/`op`/`sourceEventSeqs`）、以及按 seq 列出的类型流水。用它对比「内存里有、磁盘上没有」最直接 —— 这次根因就是靠它 + 手写解码器定位的。
+返回 `{ live, disk }` 两份摘要：事件数、`maxSeq`、**所有 replace 事件**（含 `plugin`/`op`/`sourceEventSeqs`）、以及按 seq 列出的类型流水。用它对比「内存里有、磁盘上没有」最直接 —— 这次根因就是靠它 + 手写解码器定位的。每条墓碑还带 `legacy: true/false`，直接看出还有几条是旧版空内容、没修过。
+
+### 修复旧版空墓碑（`migrate`）
+
+旧版本写的墓碑是 `content: []`。**已经在磁盘上的**空墓碑会让严格校验的上游把整个请求打回 400（见「工作原理」末尾），只改新墓碑救不了老会话。修复需要该会话**在界面上打开着**（否则 `SESSION_NOT_LIVE`）：
+
+```bash
+curl -s -X POST http://127.0.0.1:19387/dsh-message-recall \
+  -H 'content-type: application/json' \
+  -d '{"sessionId":"session-…","action":"migrate"}'
+# → {"ok":true,"value":{"action":"migrate","migrated":3}}
+```
+
+或者不敲任何东西：**在该会话里做一次撤回/删除**，任何一次操作都会顺带把旧空墓碑一并修掉（响应里带 `migrated: N`）。
+
+做法是追加一条 replace 区间指向旧墓碑**自己**的新墓碑：空节点离开 surface，新节点带同样的占位文本和**原样保留的 `removed` 列表**，所以客户端隐藏行的推导结果与修复前完全一致，日志仍然只追加不改写。幂等：再跑一次返回 `migrated: 0`。回归见 `scripts/verify.mjs` 的 `legacy repair` 一节。
+
+### 发送前的兜底守卫（默认开启）
+
+`migrate` 修的是**日志**，但它要求会话先在界面上打开。所以插件另外挂了一个 `agent/pre-step` 瀑布监听器：请求发出前扫一遍最终消息列表，把任何**空内容的 user 消息**（`[]`、`""`、或只有空 text 块）就地补上占位文本再发。于是
+
+- 没来得及 migrate 的老会话也不会再 400；
+- 其它插件或未来版本写出的空消息同样兜得住；
+- 只动 `user` 角色 —— 上游本就放行 assistant/tool 的空内容，而改写 assistant 会破坏 pi-ai 的 replay 状态（它按块数比对校验）。
+
+命中时 Host 打一行 warn，顺带提醒该会话还有未修复的旧墓碑。守卫是**运行期兜底、不写日志**，`migrate` 才是**持久清理**：平时靠守卫，看到 warn 再对那条会话跑一次 `migrate` 就彻底干净。不想要可以关：
+
+```yaml
+- id: message-recall
+  name: dsh-message-recall
+  config:
+    emptyContentGuard: false
+```
 
 改完客户端代码要注意：**Host 在插件挂载那一刻就把 `lib/client.js` 的字节读进内存**，光改文件不会让页面拿到新版；需要 disable + enable 插件（或重启），再刷新界面。仓库里为此埋了版本戳，加载时会在 Console 打一行 `[message-recall] client bundle <BUILD>`。
 
