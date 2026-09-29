@@ -28,7 +28,7 @@ tool row                     [ Delete ]  [ Delete onward ]
 
 | | |
 | --- | --- |
-| **Tested** | the DSH **0.1.7** line — desktop core `@deepseek-ai/dsh-base 0.1.7-rc.2`, peer packages resolved by the plugin `0.1.7-alpha.2`, Node 22.23 |
+| **Tested** | the **DSH 2.0 desktop** (0.2.0-rc.1 — checked against its bundled core: the session format stays v4 and the `surfaceOp` contract is unchanged); also the 0.1.7 line (core `0.1.7-rc.2`, peers `0.1.7-alpha.2`), Node 22.23 |
 | **Declared floor** | `dsh >= 0.1.7-alpha.1` (in `package.json` → `dsh.engines.dsh`, which the host enforces at install time) |
 | **Unverified** | 0.1.6 and older. Not "known broken" — never tried, so not allowed |
 
