@@ -1,6 +1,6 @@
 {
   "name": "@kyle123740/dsh-message-recall",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "删掉不喜欢的 AI 回复，或删掉已发送的错误提示词 —— 每条消息可撤回 / 删除 / 删除此处及之后。DSH 插件：写 append-only 墓碑，模型上下文与界面同步移除。Per-message recall & delete for DeepSeek Harness sessions.",
   "type": "module",
   "license": "MIT",
