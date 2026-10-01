@@ -54,38 +54,49 @@ One honest cross-instance note: the plugin's peer packages and the host core **m
 
 ## Install
 
-From the DSH built-in terminal (or any terminal with `dsh`):
+From the DSH built-in terminal (or any terminal with `dsh`) — npm and GitHub both work:
 
 ```bash
-# desktop profile
+# from npm (scoped package; desktop profile)
+dsh plugin --profile desktop add @kyle123740/dsh-message-recall
+
+# from GitHub (desktop profile)
 dsh plugin --profile desktop add github:kyle123740/dsh-message-recall
 
-# web profile
-dsh plugin --profile web add github:kyle123740/dsh-message-recall
+# web profile works the same; swap the profile name
+dsh plugin --profile web add @kyle123740/dsh-message-recall
 ```
 
 Pin a version for a reproducible install:
 
 ```bash
-dsh plugin --profile desktop add github:kyle123740/dsh-message-recall#v0.1.7
+dsh plugin --profile desktop add @kyle123740/dsh-message-recall@0.2.1
+dsh plugin --profile desktop add github:kyle123740/dsh-message-recall#v0.2.1
 ```
 
-Then **restart that profile once** (the Host half needs a fresh import) and reload the UI (the Client half is fetched by the page). Toggles live under *Settings → Plugins*, or:
+`dsh plugin` simply **forwards its arguments to pnpm** (`add` / `remove` / `why` / `ls` …) — there is **no** `enable`/`disable` subcommand; toggles live under *Settings → Plugins*. To double-check what got installed:
 
 ```bash
-dsh plugin --profile desktop disable dsh-message-recall
-dsh plugin --profile desktop enable  dsh-message-recall
+dsh plugin --profile desktop why @kyle123740/dsh-message-recall
 ```
+
+Then **restart that profile once** (the Host half needs a fresh import) and reload the UI (the Client half is fetched by the page).
 
 > A plugin runs with the privileges of your DSH process and may execute code at install time. Read the source and the licence before you install.
 
 ### Uninstall
 
+`remove` goes through pnpm too and takes the **package name** (the full scoped name, not the plugin id):
+
 ```bash
-dsh plugin --profile desktop remove dsh-message-recall
+dsh plugin --profile desktop remove @kyle123740/dsh-message-recall
 ```
 
 Nothing dangles: a tombstone is an ordinary log event, so uninstalling simply stops the hiding (the removed content reappears) and the session stays readable.
+
+### Not the same-named package on npm
+
+The bare npm name `dsh-message-recall` belongs to a different author's plugin (Jipcon's recall & re-edit plugin for DSH Web, see [Jipcon/DSH-plugins](https://github.com/Jipcon/DSH-plugins)) and is **unrelated** to this project. This plugin's npm name is always scoped — `@kyle123740/dsh-message-recall`; use that full name when installing, uninstalling, or writing config.
 
 ## What a deletion leaves in the transcript
 
@@ -255,7 +266,7 @@ When it fires, the Host logs a warning that also points at the un-migrated tombs
 
 ```yaml
 - id: message-recall
-  name: dsh-message-recall
+  name: '@kyle123740/dsh-message-recall'
   config:
     emptyContentGuard: false
 ```
@@ -272,7 +283,7 @@ One trap when iterating: **the Host reads `lib/client.js` into memory at mount t
 Arguing about which copy the page runs is easy; here is how to settle it. The Host serves plugin clients through a combo route:
 
 ```
-GET /plugins/??dsh-message-recall/client.js&rev=<rev>
+GET /plugins/??@kyle123740/dsh-message-recall/client.js&rev=<rev>
 ```
 
 `rev` is the first 12 hex chars of `sha1("plugin-artifact" \0 len:mtimeMs len:ctimeMs len:size)` (`artifactRevision` in `dsh-client-modules`) — file metadata only, contents are never hashed. So "I edited the file but the page did not change" has two completely different causes: the Host has not re-read it (rev still old), or the page has not reloaded (rev is new, the browser holds the old one). Compute the rev from the file's `mtimeMs`/`ctimeMs`/`size`, fetch that URL, and read `const BUILD = "…"` out of the response — compare it with the stamp the page logged and you know which side to fix.

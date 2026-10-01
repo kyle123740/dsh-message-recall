@@ -54,38 +54,49 @@ dsh --version
 
 ## 安装
 
-在 DSH 内置终端（或任意能跑 `dsh` 的终端）里：
+在 DSH 内置终端（或任意能跑 `dsh` 的终端）里，npm 与 GitHub 两种来源任选：
 
 ```bash
-# 桌面版
+# 从 npm 装（作用域包，桌面版）
+dsh plugin --profile desktop add @kyle123740/dsh-message-recall
+
+# 从 GitHub 装（桌面版）
 dsh plugin --profile desktop add github:kyle123740/dsh-message-recall
 
-# 网页版
-dsh plugin --profile web add github:kyle123740/dsh-message-recall
+# 网页版同理，把 profile 换成 web
+dsh plugin --profile web add @kyle123740/dsh-message-recall
 ```
 
-想固定版本（可复现安装）就带上 tag 或 commit：
+想固定版本（可复现安装）就带上精确版本号或 tag：
 
 ```bash
-dsh plugin --profile desktop add github:kyle123740/dsh-message-recall#v0.1.7
+dsh plugin --profile desktop add @kyle123740/dsh-message-recall@0.2.1
+dsh plugin --profile desktop add github:kyle123740/dsh-message-recall#v0.2.1
 ```
 
-安装后**重启该 profile 一次**（Host 半边要重新 import），界面刷新一次（Client 半边要重新取 bundle）。开关也可以随时在「设置 → 插件」里拨动：
+`dsh plugin` 只是把参数**原样转发给 pnpm**（`add` / `remove` / `why` / `ls` …），**没有** enable/disable 这类子命令——开与关在**「设置 → 插件」**里拨动。装完可用 `why` 核对装上的版本：
 
 ```bash
-dsh plugin --profile desktop disable dsh-message-recall
-dsh plugin --profile desktop enable  dsh-message-recall
+dsh plugin --profile desktop why @kyle123740/dsh-message-recall
 ```
+
+安装后**重启该 profile 一次**（Host 半边要重新 import），界面刷新一次（Client 半边要重新取 bundle）。
 
 > 插件以当前 DSH 进程的权限运行，安装时可能执行代码。装之前请先看源码与许可。
 
 ### 卸载
 
+`remove` 同样走 pnpm，认的是**包名**（作用域全名，不是插件 id）：
+
 ```bash
-dsh plugin --profile desktop remove dsh-message-recall
+dsh plugin --profile desktop remove @kyle123740/dsh-message-recall
 ```
 
 拔除不残留状态：墓碑只是普通日志事件，卸载后那些位置不再被隐藏（被删内容会重新出现在界面里），会话照常可读。
+
+### 与 npm 上同名的包无关
+
+npm 上的裸名 `dsh-message-recall` 是另一个作者的另一个插件（Jipcon 的 DSH Web 撤回/重编辑插件，见 [Jipcon/DSH-plugins](https://github.com/Jipcon/DSH-plugins)），与本项目**无关**。本插件的包名始终带作用域前缀 `@kyle123740/`，安装、卸载、写配置时都认这个全名，别装错。
 
 ## 删除后在界面上留下什么
 
@@ -258,7 +269,7 @@ curl -s -X POST http://127.0.0.1:19387/dsh-message-recall \
 
 ```yaml
 - id: message-recall
-  name: dsh-message-recall
+  name: '@kyle123740/dsh-message-recall'
   config:
     emptyContentGuard: false
 ```
@@ -270,7 +281,7 @@ curl -s -X POST http://127.0.0.1:19387/dsh-message-recall \
 界面跑的是哪份 bundle 容易争。Host 用 combo 形态 serve 插件客户端：
 
 ```
-GET /plugins/??dsh-message-recall/client.js&rev=<rev>
+GET /plugins/??@kyle123740/dsh-message-recall/client.js&rev=<rev>
 ```
 
 `rev` 是 `sha1("plugin-artifact" \0 len:mtimeMs len:ctimeMs len:size)` 的前 12 位（`dsh-client-modules` 的 `artifactRevision`），只取 `lib/client.js` 的文件元数据，不哈希内容。所以「改了文件但页面没变」有两种完全不同的原因 —— Host 没重读（rev 还是旧的），或页面没重载（rev 是新的但浏览器拿着旧的）。用文件 mtime/ctime/size 自己算出 rev 打这个 URL，返回体里的 `const BUILD = "…"` 就是服务器正在发的版本；和页面 Console 里那行版本戳一比就分清了。
