@@ -166,6 +166,7 @@ if (typeof value["kind"] !== "string" || value["kind"].length === 0 || value["ki
 - 系统提示（surface node 0）永远不能撤回或删除。
 - **撤回/删除不可撤销**：日志里原文还在（必要时可读会话日志手工找回），但界面与模型上下文里不会再出现。
 - 只处理当前会话的行。子 Agent 会话窗口同样会显示按钮，但操作对象就是那条被打开的会话。
+- **能力边界**：Client 半边（`lib/client.js`）只向本插件在 DSH 进程内注册的本地路由 `POST /dsh-message-recall` 发请求（同源 `fetch`，仅限当前 DSH 实例），没有任何外部网络访问；Host 半边（`lib/main.js`)不直接读写磁盘，持久化全部经由 DSH 的会话存储 API 完成。整个运行时没有子进程/命令执行，没有凭据访问，没有原生二进制。`scripts/` 下的排查脚本会用 `node:fs` 读会话日志，但它们是开发期工具，不在安装包内（未列入 `package.json` 的 `files`）。
 
 ## HTTP 接口
 

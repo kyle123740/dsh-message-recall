@@ -166,6 +166,7 @@ The UI half shadows no shipped renderer. It mounts headlessly into `conversation
 - The system prompt (surface node 0) can never be recalled or deleted.
 - **Recall/delete is not undoable.** The original text remains in the log (recoverable by hand from the session log), but it is gone from the transcript and the model context.
 - Only the current Session's rows are handled. Subagent windows show the buttons too, and they act on the Session actually open there.
+- **Capability boundaries**: the Client half (`lib/client.js`) only POSTs to the plugin's own locally registered route `/dsh-message-recall` inside the DSH process (same-origin `fetch`, this DSH instance only); there is no external network access. The Host half (`lib/main.js`) never touches disk directly — persistence goes entirely through DSH's session storage APIs. The runtime has no subprocess/command execution, no credential access, and no native binaries. The support scripts under `scripts/` use `node:fs` to read session logs, but they are development-time tools and are not part of the installable package (not listed in `package.json` `files`).
 
 ## HTTP interface
 
