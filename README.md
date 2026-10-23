@@ -28,8 +28,9 @@ AI 的回复                [ 删除 ]  [ 删除此处及之后 ]
 
 | | |
 | --- | --- |
-| **实测通过** | DSH **2.0 桌面版**（0.2.0-rc.1，对照内置核心逐项核过：会话格式仍 v4，`surfaceOp` 契约不变）；以及 0.1.7 线（core `0.1.7-rc.2`，peer 包 `0.1.7-alpha.2`），Node 22.23 |
-| **声明下限** | `dsh >= 0.1.7-alpha.1`（写在 `package.json` 的 `dsh.engines.dsh`，宿主安装时会拿它做兼容性拦截） |
+| **实测通过** | DSH **2.0 桌面版 0.2.1-rc.2**（对照自带核心逐个核过：会话格式仍 v4，`surfaceOp` / `sourceEventSeqs` 契约不变，`createUserMessage`、`foldSurface`、`isReplacementSurfaceEvent` 均在位；三套自检全绿）；以及 0.2.0-rc.2、0.1.7 线（core `0.1.7-rc.2`，peer 包 `0.1.7-alpha.2`），Node 22.23 |
+| **声明范围** | `dsh = ^0.1.7-alpha.1 \|\| ^0.2.0-rc.1 \|\| ^0.2.1-rc.1`（写在 `package.json` 的 `dsh.engines.dsh`，宿主安装时会拿它做兼容性拦截） |
+| **为什么不是一个 `>=`** | 预发布版本的 semver 规则很严：`>=0.1.7-alpha.1` 对 `0.2.1-rc.2` 求值是 **false**（只有带同一 `major.minor.patch` 的比较项才接纳预发布版）。所以这里按线枚举，而不是写开区间 |
 | **未验证** | 0.1.6 及更早。不是「已知会坏」，是没测过，所以不放行 |
 
 查你自己的版本：
@@ -50,7 +51,7 @@ dsh --version
 | DOM 标记 `data-chat-flow` / `-key` / `-kind` / `data-chat-turn` | 行装饰与遮蔽 | 0.1.x（`data-chat-turn` 自 rc.6 起就被社区插件依赖） |
 | `ctx.sessions.binding(id).eventSource` | 读墓碑 | 0.1.7 面；代码保留 `sessions.get(id)` 回退到旧面 |
 
-一个真实的跨实例事实：插件的 peer 包与宿主 core **可能不是同一份模块实例**（本机就是 0.1.7-rc.2 的 core 在跑 0.1.7-alpha.2 的包）。之所以安全，是因为本插件只碰**结构化数据** —— `createUserMessage` 产出的是普通冻结对象，surface 校验走 JSON 而不是 `instanceof`。如果你的环境报 peer 不兼容，别去硬改 `engines`，先跑一遍 `npm test` 看接口还在不在。
+一个真实的跨实例事实：插件的 peer 包与宿主 core **可能不是同一份模块实例**（本机就见过 0.2.1-rc.2 的 shell 在跑 profile 里 0.2.0-rc.2 的包）。之所以安全，是因为本插件只碰**结构化数据** —— `createUserMessage` 产出的是普通冻结对象，surface 校验走 JSON 而不是 `instanceof`。如果你的环境报 peer 不兼容，别去硬改 `engines`，先跑一遍 `npm test` 看接口还在不在。
 
 ## 安装
 
@@ -70,8 +71,8 @@ dsh plugin --profile web add @kyle123740/dsh-message-recall
 想固定版本（可复现安装）就带上精确版本号或 tag：
 
 ```bash
-dsh plugin --profile desktop add @kyle123740/dsh-message-recall@0.2.1
-dsh plugin --profile desktop add github:kyle123740/dsh-message-recall#v0.2.1
+dsh plugin --profile desktop add @kyle123740/dsh-message-recall@0.2.2
+dsh plugin --profile desktop add github:kyle123740/dsh-message-recall#v0.2.2
 ```
 
 `dsh plugin` 只是把参数**原样转发给 pnpm**（`add` / `remove` / `why` / `ls` …），**没有** enable/disable 这类子命令——开与关在**「设置 → 插件」**里拨动。装完可用 `why` 核对装上的版本：

@@ -28,8 +28,9 @@ tool row                     [ Delete ]  [ Delete onward ]
 
 | | |
 | --- | --- |
-| **Tested** | the **DSH 2.0 desktop** (0.2.0-rc.1 — checked against its bundled core: the session format stays v4 and the `surfaceOp` contract is unchanged); also the 0.1.7 line (core `0.1.7-rc.2`, peers `0.1.7-alpha.2`), Node 22.23 |
-| **Declared floor** | `dsh >= 0.1.7-alpha.1` (in `package.json` → `dsh.engines.dsh`, which the host enforces at install time) |
+| **Tested** | the **DSH 2.0 desktop at 0.2.1-rc.2** (checked symbol by symbol against its bundled core: the session format stays v4, the `surfaceOp` / `sourceEventSeqs` contracts are unchanged, and `createUserMessage`, `foldSurface` and `isReplacementSurfaceEvent` are all present; all three test suites pass); also 0.2.0-rc.2 and the 0.1.7 line (core `0.1.7-rc.2`, peers `0.1.7-alpha.2`), Node 22.23 |
+| **Declared range** | `dsh = ^0.1.7-alpha.1 \|\| ^0.2.0-rc.1 \|\| ^0.2.1-rc.1` (in `package.json` → `dsh.engines.dsh`, which the host enforces at install time) |
+| **Why not one `>=`** | Prerelease semver is strict: `>=0.1.7-alpha.1` evaluates to **false** for `0.2.1-rc.2` — only a comparitor carrying the same `major.minor.patch` admits a prerelease. Hence the per-line list instead of an open range |
 | **Unverified** | 0.1.6 and older. Not "known broken" — never tried, so not allowed |
 
 Check your own version:
@@ -50,7 +51,7 @@ Host interfaces this plugin leans on. If something breaks after a DSH upgrade, s
 | DOM markers `data-chat-flow` / `-key` / `-kind` / `data-chat-turn` | decorating and hiding rows | 0.1.x (`data-chat-turn` has been relied on by community plugins since rc.6) |
 | `ctx.sessions.binding(id).eventSource` | reading tombstones | the 0.1.7 face; the code falls back to `sessions.get(id)` for the older one |
 
-One honest cross-instance note: the plugin's peer packages and the host core **may be different module instances** (on the machine this was built on, a 0.1.7-rc.2 core runs against 0.1.7-alpha.2 packages). That is safe here only because the plugin touches structured data — `createUserMessage` returns a plain frozen object and surface validation goes through JSON, not `instanceof`. If your install reports a peer conflict, don't force `engines` wider: run `npm test` first and see whether the interfaces are still there.
+One honest cross-instance note: the plugin's peer packages and the host core **may be different module instances** (this machine has had a 0.2.1-rc.2 shell running against 0.2.0-rc.2 packages from the profile store). That is safe here only because the plugin touches structured data — `createUserMessage` returns a plain frozen object and surface validation goes through JSON, not `instanceof`. If your install reports a peer conflict, don't force `engines` wider: run `npm test` first and see whether the interfaces are still there.
 
 ## Install
 
@@ -70,8 +71,8 @@ dsh plugin --profile web add @kyle123740/dsh-message-recall
 Pin a version for a reproducible install:
 
 ```bash
-dsh plugin --profile desktop add @kyle123740/dsh-message-recall@0.2.1
-dsh plugin --profile desktop add github:kyle123740/dsh-message-recall#v0.2.1
+dsh plugin --profile desktop add @kyle123740/dsh-message-recall@0.2.2
+dsh plugin --profile desktop add github:kyle123740/dsh-message-recall#v0.2.2
 ```
 
 `dsh plugin` simply **forwards its arguments to pnpm** (`add` / `remove` / `why` / `ls` …) — there is **no** `enable`/`disable` subcommand; toggles live under *Settings → Plugins*. To double-check what got installed:
